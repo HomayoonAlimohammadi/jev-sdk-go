@@ -38,6 +38,11 @@ type Request struct {
 
 	// RequestIDHeader, when set, names the response header to quote in logs.
 	RequestIDHeader string
+
+	// MaxResponseBytes bounds how much of a response body is read into
+	// memory. One extra byte is read so the caller can tell a body that fits
+	// from one that was cut short. Zero reads the body in full.
+	MaxResponseBytes int64
 }
 
 // Response is a completed exchange whose body has been read in full.
@@ -171,7 +176,12 @@ func (c *Client) attempt(ctx context.Context, req Request, attempt int) (*Respon
 	}
 	defer httpResp.Body.Close()
 
-	payload, err := io.ReadAll(httpResp.Body)
+	reader := io.Reader(httpResp.Body)
+	if req.MaxResponseBytes > 0 {
+		reader = io.LimitReader(reader, req.MaxResponseBytes+1)
+	}
+
+	payload, err := io.ReadAll(reader)
 	if err != nil {
 		c.Logger.Info("jev: response body unreadable", "method", req.Method, "url", req.URL, "error", err)
 		return nil, err

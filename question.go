@@ -117,6 +117,25 @@ func (s Score) MarshalJSON() ([]byte, error) {
 	}{kindScore, score(s)})
 }
 
+// Levels builds [Score] criteria from one plain description per level, so a
+// rubric of short phrases reads as one:
+//
+//	jev.Score{
+//	    Instructions: "How urgent is this ticket?",
+//	    Criteria:     jev.Levels("can wait", "this week", "today"),
+//	}
+//
+// Order is the meaning here, unlike [Labels]: a description's position is its
+// score, counting from zero. Write the slice out to describe a level with
+// something richer than a string.
+func Levels(descriptions ...string) []any {
+	criteria := make([]any, len(descriptions))
+	for i, description := range descriptions {
+		criteria[i] = description
+	}
+	return criteria
+}
+
 // RawQuestion is sent verbatim, including its "type" key. It is the escape
 // hatch for question kinds or fields the API accepts before this SDK models
 // them; the API, not the SDK, validates its contents.

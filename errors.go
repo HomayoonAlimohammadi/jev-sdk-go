@@ -23,9 +23,14 @@ var (
 	ErrInvalidTimeout  = errors.New("jev: invalid timeout")
 	ErrInvalidRetry    = errors.New("jev: invalid retry policy")
 	ErrInvalidBaseURL  = errors.New("jev: invalid base URL")
+	ErrInvalidState    = errors.New("jev: invalid state")
 	ErrNoQuestions     = errors.New("jev: at least one question is required")
 	ErrInvalidQuestion = errors.New("jev: invalid question")
 	ErrEncodeRequest   = errors.New("jev: request body could not be encoded as JSON")
+
+	// ErrResponseTooLarge reports a response body over the limit set by
+	// [WithMaxResponseBytes]. It arrives wrapped in a [*ResponseError].
+	ErrResponseTooLarge = errors.New("jev: response body too large")
 )
 
 // Status categories. An [APIError] matches these through [errors.Is], so a

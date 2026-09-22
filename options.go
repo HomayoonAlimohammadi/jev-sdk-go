@@ -16,6 +16,8 @@ type clientConfig struct {
 	retry      RetryPolicy
 	logger     *slog.Logger
 	httpClient *http.Client
+
+	maxResponseBytes int64
 }
 
 // ClientOption configures a [Client]. Options are applied in order, and each
@@ -73,6 +75,16 @@ func WithRetry(policy RetryPolicy) ClientOption {
 func WithHeader(name, value string) ClientOption {
 	return func(c *clientConfig) error {
 		c.header.Set(name, value)
+		return nil
+	}
+}
+
+// WithMaxResponseBytes caps how much of a response body is read into memory,
+// guarding against a runaway or hostile server. A body over the cap fails with
+// a [*ResponseError] wrapping [ErrResponseTooLarge]. Zero removes the cap.
+func WithMaxResponseBytes(n int64) ClientOption {
+	return func(c *clientConfig) error {
+		c.maxResponseBytes = n
 		return nil
 	}
 }

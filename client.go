@@ -33,6 +33,11 @@ const (
 	// DefaultTimeout bounds each individual HTTP attempt, not the call as a
 	// whole; see [RetryPolicy.Budget] for that.
 	DefaultTimeout = 10 * time.Second
+
+	// DefaultMaxResponseBytes caps how much of a response body is read into
+	// memory, so a runaway or hostile server cannot exhaust it. The API's
+	// responses are far smaller than this.
+	DefaultMaxResponseBytes = 1 << 20 // 1 MiB
 )
 
 // Protocol constants.
@@ -97,6 +102,8 @@ type Client struct {
 	header  http.Header
 	retry   RetryPolicy
 
+	maxResponseBytes int64
+
 	httpClient *http.Client
 	transport  *transport.Client
 }
@@ -115,8 +122,10 @@ func New(opts ...ClientOption) (*Client, error) {
 		model:   envOr(DefaultModelEnv, DefaultModel),
 		timeout: DefaultTimeout,
 		retry:   DefaultRetryPolicy(),
-		logger:  slog.New(slog.DiscardHandler),
-		header:  http.Header{},
+
+		maxResponseBytes: DefaultMaxResponseBytes,
+		logger:           slog.New(slog.DiscardHandler),
+		header:           http.Header{},
 	}
 
 	for _, opt := range opts {
@@ -139,6 +148,9 @@ func New(opts ...ClientOption) (*Client, error) {
 	if err := cfg.retry.validate(); err != nil {
 		return nil, err
 	}
+	if cfg.maxResponseBytes < 0 {
+		return nil, fmt.Errorf("%w: it must not be negative, got %d", ErrResponseTooLarge, cfg.maxResponseBytes)
+	}
 
 	httpClient := cfg.httpClient
 	if httpClient == nil {
@@ -146,12 +158,15 @@ func New(opts ...ClientOption) (*Client, error) {
 	}
 
 	return &Client{
-		apiKey:     apiKey,
-		baseURL:    baseURL,
-		model:      cfg.model,
-		timeout:    cfg.timeout,
-		header:     cfg.header,
-		retry:      cfg.retry,
+		apiKey:  apiKey,
+		baseURL: baseURL,
+		model:   cfg.model,
+		timeout: cfg.timeout,
+		header:  cfg.header,
+		retry:   cfg.retry,
+
+		maxResponseBytes: cfg.maxResponseBytes,
+
 		httpClient: httpClient,
 		transport: &transport.Client{
 			HTTP:   httpClient,
@@ -272,6 +287,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, call 
 		Timeout:          timeout,
 		RetryCountHeader: retryCountHeader,
 		RequestIDHeader:  requestIDHeader,
+		MaxResponseBytes: c.maxResponseBytes,
 	}
 
 	resp, attempts, err := c.transport.Send(ctx, req, c.policy(policy, endpoint))
@@ -280,6 +296,17 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, call 
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return ResponseMeta{}, apiError(endpoint, resp)
+	}
+
+	// The transport reads one byte past the cap, so an overlong body is
+	// detectable here without ever being held in full.
+	if c.maxResponseBytes > 0 && int64(len(resp.Body)) > c.maxResponseBytes {
+		meta := ResponseMeta{
+			RequestID:  resp.Header.Get(requestIDHeader),
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header,
+		}
+		return ResponseMeta{}, meta.invalid(endpoint, "", fmt.Errorf("%w: over %d bytes", ErrResponseTooLarge, c.maxResponseBytes))
 	}
 
 	return ResponseMeta{

@@ -96,6 +96,16 @@ jev.Noul{
 }
 ```
 
+A `Score`'s criteria is an ordered rubric: a description's position is its
+score, counting from zero. `jev.Levels` builds one from plain phrases.
+
+```go
+jev.Score{
+	Instructions: "How urgent is this ticket?",
+	Criteria:     jev.Levels("can wait", "this week", "today"),
+}
+```
+
 ## Answers
 
 `SystemOne` returns every answer in `resp.Answers`, plus per-kind maps so you
@@ -166,7 +176,13 @@ whitespace-only environment value is ignored.
 | `WithRetry` | — | `DefaultRetryPolicy()` |
 | `WithHeader` | — | none |
 | `WithHTTPClient` | — | `&http.Client{}` |
+| `WithMaxResponseBytes` | — | 1 MiB |
 | `WithLogger` | — | logs nothing |
+
+Requests are checked before they leave: `State` must encode to a string,
+object or array, questions must be non-empty, and a `Score` or `Choice` must
+carry criteria. Response bodies are read under a 1 MiB cap, so a runaway
+server cannot exhaust memory; raise or remove it with `WithMaxResponseBytes`.
 
 ## Retries
 

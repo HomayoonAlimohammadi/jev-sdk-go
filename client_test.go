@@ -703,3 +703,222 @@ func TestResponseErrorUnwrapsCause(t *testing.T) {
 		t.Fatalf("SystemOne() error = %v, want it to unwrap to a json error", err)
 	}
 }
+
+func TestResponseSizeCap(t *testing.T) {
+	t.Parallel()
+
+	// A body one byte over the cap must fail; one exactly at it must not.
+	const cap = 512
+
+	tests := []struct {
+		name    string
+		delta   int // body size relative to the cap
+		wantErr bool
+	}{
+		{"under the cap", -100, false},
+		{"exactly at the cap", 0, false},
+		{"one byte over", 1, true},
+		{"far over", 4096, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			prefix := `{"model":"m","usage":{},"answers":{},"pad":"`
+			suffix := `"}`
+			fill := cap - len(prefix) - len(suffix) + tt.delta
+			body := prefix + strings.Repeat("x", fill) + suffix
+			if len(body) != cap+tt.delta {
+				t.Fatalf("test built a %d byte body, want %d", len(body), cap+tt.delta)
+			}
+
+			client, _ := newTestClient(t, respondJSON(http.StatusOK, body), WithMaxResponseBytes(cap))
+			_, err := client.SystemOne(t.Context(), noulRequest())
+
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("SystemOne() error = %v, want nil for a %d byte body", err, len(body))
+				}
+				return
+			}
+
+			var responseErr *ResponseError
+			if !errors.As(err, &responseErr) {
+				t.Fatalf("SystemOne() error = %v, want *ResponseError", err)
+			}
+			if !errors.Is(err, ErrResponseTooLarge) {
+				t.Errorf("errors.Is(err, ErrResponseTooLarge) = false, got %v", err)
+			}
+			if responseErr.StatusCode != http.StatusOK {
+				t.Errorf("StatusCode = %d, want 200", responseErr.StatusCode)
+			}
+		})
+	}
+}
+
+func TestResponseSizeCapBoundsMemory(t *testing.T) {
+	t.Parallel()
+
+	// The transport must stop reading just past the cap rather than buffering
+	// whatever the server decides to send.
+	const cap = 1024
+
+	var served atomic.Int64
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", jsonContentType)
+		chunk := strings.Repeat("x", 4096)
+		for range 512 { // 2 MiB if it were all read
+			n, err := io.WriteString(w, chunk)
+			served.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}, WithMaxResponseBytes(cap))
+
+	_, err := client.SystemOne(t.Context(), noulRequest())
+	if !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("SystemOne() error = %v, want ErrResponseTooLarge", err)
+	}
+}
+
+func TestResponseSizeCapDisabled(t *testing.T) {
+	t.Parallel()
+
+	body := `{"model":"m","usage":{},"answers":{},"pad":"` + strings.Repeat("x", 4096) + `"}`
+	client, _ := newTestClient(t, respondJSON(http.StatusOK, body), WithMaxResponseBytes(0))
+
+	resp, err := client.SystemOne(t.Context(), noulRequest())
+	if err != nil {
+		t.Fatalf("SystemOne() error = %v, want the cap disabled", err)
+	}
+	if len(resp.Raw) != len(body) {
+		t.Errorf("Raw is %d bytes, want the whole %d byte body", len(resp.Raw), len(body))
+	}
+}
+
+func TestOversizedErrorResponseStaysAnAPIError(t *testing.T) {
+	t.Parallel()
+
+	// An error status keeps its status semantics; the message is truncated
+	// rather than the error being reclassified.
+	body := `{"message":"` + strings.Repeat("x", 4096) + `"}`
+	client, _ := newTestClient(t, respondJSON(http.StatusServiceUnavailable, body), WithMaxResponseBytes(256))
+
+	_, err := client.SystemOne(t.Context(), noulRequest())
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("SystemOne() error = %v, want *APIError", err)
+	}
+	if !errors.Is(err, ErrServer) {
+		t.Errorf("errors.Is(err, ErrServer) = false")
+	}
+	if len(apiErr.Message) > maxErrorBodyLength+len("…") {
+		t.Errorf("Message is %d bytes, want it truncated", len(apiErr.Message))
+	}
+}
+
+func TestNegativeMaxResponseBytesRejected(t *testing.T) {
+	t.Parallel()
+
+	if _, err := New(WithAPIKey("k"), WithMaxResponseBytes(-1)); !errors.Is(err, ErrResponseTooLarge) {
+		t.Errorf("New() error = %v, want it to reject a negative cap", err)
+	}
+}
+
+func TestStateValidation(t *testing.T) {
+	t.Parallel()
+
+	type doc struct {
+		Subject string `json:"subject"`
+	}
+
+	tests := []struct {
+		name    string
+		state   any
+		wantErr bool
+	}{
+		{"string", "a support ticket", false},
+		{"empty string", "", false},
+		{"map", map[string]any{"subject": "hi"}, false},
+		{"slice", []any{"a", "b"}, false},
+		{"struct", doc{Subject: "hi"}, false},
+		{"pointer to struct", &doc{Subject: "hi"}, false},
+		{"raw message object", json.RawMessage(`{"a":1}`), false},
+
+		{"nil", nil, true},
+		{"typed nil map", map[string]any(nil), true},
+		{"number", 42, true},
+		{"float", 1.5, true},
+		{"bool", true, true},
+		{"raw message number", json.RawMessage(`42`), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, rec := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
+
+			req := noulRequest()
+			req.State = tt.state
+			_, err := client.SystemOne(t.Context(), req)
+
+			if !tt.wantErr {
+				if err != nil {
+					t.Fatalf("SystemOne() error = %v, want nil", err)
+				}
+				return
+			}
+
+			if !errors.Is(err, ErrInvalidState) {
+				t.Fatalf("SystemOne() error = %v, want ErrInvalidState", err)
+			}
+			if rec.count() != 0 {
+				t.Errorf("an invalid state reached the network")
+			}
+		})
+	}
+}
+
+func TestUnencodableStateReported(t *testing.T) {
+	t.Parallel()
+
+	client, rec := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
+
+	req := noulRequest()
+	req.State = make(chan int)
+	_, err := client.SystemOne(t.Context(), req)
+
+	if !errors.Is(err, ErrEncodeRequest) {
+		t.Errorf("SystemOne() error = %v, want ErrEncodeRequest", err)
+	}
+	if rec.count() != 0 {
+		t.Errorf("an unencodable state reached the network")
+	}
+}
+
+func TestStateEncodedOnce(t *testing.T) {
+	t.Parallel()
+
+	client, rec := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
+
+	// A state pre-encoded as a RawMessage must reach the wire verbatim, not
+	// double-encoded into a string.
+	req := noulRequest()
+	req.State = json.RawMessage(`{"subject":"hi","tags":["a"]}`)
+	if _, err := client.SystemOne(t.Context(), req); err != nil {
+		t.Fatalf("SystemOne() error = %v", err)
+	}
+
+	_, body := rec.last()
+	var sent map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("request body is not JSON: %v", err)
+	}
+	if got := string(sent["state"]); got != `{"subject":"hi","tags":["a"]}` {
+		t.Errorf("state = %s, want it embedded verbatim", got)
+	}
+}

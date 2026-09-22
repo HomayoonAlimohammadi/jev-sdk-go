@@ -1,6 +1,7 @@
 package jev
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -100,13 +101,23 @@ func (c *Client) systemOne(ctx context.Context, req SystemOneRequest, opts []Cal
 		return ResponseMeta{}, err
 	}
 
+	// State is encoded once here: the result is checked against the shapes the
+	// API accepts, then embedded verbatim rather than marshaled a second time.
+	state, err := json.Marshal(req.State)
+	if err != nil {
+		return ResponseMeta{}, fmt.Errorf("%w: state: %w", ErrEncodeRequest, err)
+	}
+	if err := validateState(state); err != nil {
+		return ResponseMeta{}, err
+	}
+
 	model := req.Model
 	if model == "" {
 		model = c.model
 	}
 
 	body := map[string]any{
-		"state":     req.State,
+		"state":     json.RawMessage(state),
 		"model":     model,
 		"questions": req.Questions,
 	}
@@ -118,4 +129,17 @@ func (c *Client) systemOne(ctx context.Context, req SystemOneRequest, opts []Cal
 	}
 
 	return c.do(ctx, http.MethodPost, systemOnePath, encoded, call)
+}
+
+// validateState rejects a state the API will refuse. It must encode to a
+// string, object or array; a bare number, boolean or null is not content.
+func validateState(encoded []byte) error {
+	trimmed := bytes.TrimSpace(encoded)
+	if len(trimmed) > 0 {
+		switch trimmed[0] {
+		case '"', '{', '[':
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: it must be a string, object or array, got %s", ErrInvalidState, trimmed)
 }

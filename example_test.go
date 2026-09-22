@@ -53,6 +53,24 @@ func ExampleLabels_described() {
 	// {"type":"choice","instructions":"What is this ticket about?","criteria":{"billing":"Payments, invoices and refunds, but not delivery complaints","other":null,"technical":{"examples":["500 error"],"meaning":"The product misbehaved"}}}
 }
 
+// Levels builds a score rubric from one phrase per level. Position is the
+// score, counting from zero.
+func ExampleLevels() {
+	question := jev.Score{
+		Instructions: "How urgent is this ticket?",
+		Criteria:     jev.Levels("can wait", "this week", "today"),
+	}
+
+	encoded, err := json.Marshal(question)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(encoded))
+
+	// Output:
+	// {"type":"score","instructions":"How urgent is this ticket?","criteria":["can wait","this week","today"]}
+}
+
 func ExampleClient_SystemOne() {
 	client, err := jev.New()
 	if err != nil {
@@ -69,7 +87,7 @@ func ExampleClient_SystemOne() {
 			},
 			"urgency": jev.Score{
 				Instructions: "How urgent is this ticket?",
-				Criteria:     []any{"can wait", "this week", "today"},
+				Criteria:     jev.Levels("can wait", "this week", "today"),
 			},
 		},
 	})

@@ -42,7 +42,7 @@ func run() error {
 			},
 			"urgency": jev.Score{
 				Instructions: "How urgent is this ticket?",
-				Criteria:     []any{"can wait", "this week", "today"},
+				Criteria:     jev.Levels("can wait", "this week", "today"),
 			},
 		},
 	})

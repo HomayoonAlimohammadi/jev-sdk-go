@@ -278,3 +278,72 @@ func TestLabelsEmptyIsRejected(t *testing.T) {
 		t.Errorf("validateQuestions() error = %v, want ErrInvalidQuestion", err)
 	}
 }
+
+func TestLevels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		descriptions []string
+		want         []any
+	}{
+		{"several", []string{"can wait", "this week", "today"}, []any{"can wait", "this week", "today"}},
+		{"one", []string{"only"}, []any{"only"}},
+		// Unlike Labels, position is the meaning, so repeats are distinct levels.
+		{"repeats are distinct levels", []string{"same", "same"}, []any{"same", "same"}},
+		{"none", nil, []any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := Levels(tt.descriptions...)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Levels(%q) = %v, want %v", tt.descriptions, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLevelsPreservesOrder(t *testing.T) {
+	t.Parallel()
+
+	// A level's index is its score, so the encoded order must be the author's.
+	got, err := json.Marshal(Score{Instructions: "How urgent?", Criteria: Levels("can wait", "this week", "today")})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	want := `{"type":"score","instructions":"How urgent?","criteria":["can wait","this week","today"]}`
+	if string(got) != want {
+		t.Errorf("Marshal() = %s, want %s", got, want)
+	}
+}
+
+func TestLevelsMarshalsLikeASliceLiteral(t *testing.T) {
+	t.Parallel()
+
+	helper, err := json.Marshal(Score{Criteria: Levels("bad", "good")})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	literal, err := json.Marshal(Score{Criteria: []any{"bad", "good"}})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	if string(helper) != string(literal) {
+		t.Errorf("Levels() encoded as %s, want it identical to the slice literal %s", helper, literal)
+	}
+}
+
+func TestLevelsEmptyIsRejected(t *testing.T) {
+	t.Parallel()
+
+	err := validateQuestions(map[string]Question{"q": Score{Criteria: Levels()}})
+	if !errors.Is(err, ErrInvalidQuestion) {
+		t.Errorf("validateQuestions() error = %v, want ErrInvalidQuestion", err)
+	}
+}
