@@ -13,8 +13,10 @@ import (
 // Internal decoding failures. They never escape the package: each one is
 // converted into a [ResponseError] carrying the offending field path.
 var (
-	errMissingField      = errors.New("missing or invalid field")
-	errUnknownAnswerKind = errors.New("unrecognized answer type")
+	errMissingField       = errors.New("missing or invalid field")
+	errUnknownAnswerKind  = errors.New("unrecognized answer type")
+	errMissingAnswer      = errors.New("no answer for this question")
+	errAnswerKindMismatch = errors.New("answer type does not match the question")
 )
 
 // ResponseMeta is the HTTP metadata attached to every response.
@@ -93,7 +95,7 @@ type systemOneWire struct {
 
 // decodeSystemOne parses a System One response body, reporting the first
 // field that is missing or structurally wrong.
-func decodeSystemOne(meta ResponseMeta, endpoint string, logger *slog.Logger) (*SystemOneResponse, error) {
+func decodeSystemOne(meta ResponseMeta, questions map[string]Question, endpoint string, logger *slog.Logger) (*SystemOneResponse, error) {
 	var wire systemOneWire
 	if err := json.Unmarshal(meta.Raw, &wire); err != nil {
 		return nil, meta.invalid(endpoint, jsonFieldPath(err), err)
@@ -113,6 +115,13 @@ func decodeSystemOne(meta ResponseMeta, endpoint string, logger *slog.Logger) (*
 		return nil, meta.invalid(endpoint, "usage", errMissingField)
 	}
 
+	// Every question asked must come back answered, and answered in kind. A map
+	// lookup on a missing answer would otherwise yield a zero value, and a
+	// NoulAnswer{} reads as a confident "no".
+	if field, err := checkAnswered(questions, kinds); err != nil {
+		return nil, meta.invalid(endpoint, field, err)
+	}
+
 	answers, field, err := decodeAnswers(wire.Answers, kinds, logger)
 	if err != nil {
 		return nil, meta.invalid(endpoint, field, err)
@@ -128,6 +137,27 @@ func decodeSystemOne(meta ResponseMeta, endpoint string, logger *slog.Logger) (*
 		Choices:      choices,
 		Scores:       scores,
 	}, nil
+}
+
+// checkAnswered reports the first question that went unanswered, or was
+// answered by something other than what it asked for. Questions are visited in
+// sorted order so the reported path does not depend on map iteration.
+//
+// An answer of a kind this SDK version does not model still counts as
+// answered: it matches the question's type, and the payload stays on Raw.
+func checkAnswered(questions map[string]Question, kinds map[string]string) (string, error) {
+	for _, name := range sortedKeys(questions) {
+		want := questionKind(questions[name])
+
+		got, answered := kinds[name]
+		if !answered {
+			return "answers." + name, errMissingAnswer
+		}
+		if got != want {
+			return "answers." + name + ".type", errAnswerKindMismatch
+		}
+	}
+	return "", nil
 }
 
 type modelWire struct {

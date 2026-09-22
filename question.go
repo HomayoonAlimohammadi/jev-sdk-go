@@ -143,6 +143,24 @@ type RawQuestion map[string]any
 
 func (RawQuestion) question() {}
 
+// questionKind reports the wire "type" a question asks for, which the matching
+// answer must carry. A RawQuestion's type is whatever the caller put there,
+// including one this SDK version does not model.
+func questionKind(question Question) string {
+	switch q := deref(question).(type) {
+	case Noul:
+		return kindNoul
+	case Choice:
+		return kindChoice
+	case Score:
+		return kindScore
+	case RawQuestion:
+		kind, _ := q["type"].(string)
+		return kind
+	}
+	return ""
+}
+
 // validateQuestions rejects question maps the API is certain to refuse, so the
 // caller gets a local error instead of a round trip. Names are checked in
 // sorted order so the reported error does not depend on map iteration.

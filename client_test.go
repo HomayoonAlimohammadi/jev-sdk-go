@@ -77,12 +77,17 @@ func respondJSON(status int, body string, headers ...string) http.HandlerFunc {
 	}
 }
 
+// noulRequest asks a single question that systemOneBody answers, so a test
+// that does not care about answers still satisfies the answered-in-kind check.
 func noulRequest() SystemOneRequest {
 	return SystemOneRequest{
 		State:     "hello",
-		Questions: map[string]Question{"q": Noul{Instructions: "?"}},
+		Questions: map[string]Question{"spam": Noul{Instructions: "?"}},
 	}
 }
+
+// noulAnswer is the minimal answers object noulRequest expects back.
+const noulAnswer = `"answers":{"spam":{"type":"noul","noul":0.5}}`
 
 func TestSystemOneRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -138,7 +143,7 @@ func TestSystemOneValidatesBeforeSending(t *testing.T) {
 		{"empty score", SystemOneRequest{State: "x", Questions: map[string]Question{"r": Score{}}}, ErrInvalidQuestion},
 		{
 			"unencodable extra",
-			SystemOneRequest{State: "x", Questions: map[string]Question{"q": Noul{}}, Extra: map[string]any{"bad": make(chan int)}},
+			SystemOneRequest{State: "x", Questions: map[string]Question{"spam": Noul{}}, Extra: map[string]any{"bad": make(chan int)}},
 			ErrEncodeRequest,
 		},
 	}
@@ -167,7 +172,7 @@ func TestSystemOneExtraShallowMerge(t *testing.T) {
 
 	_, err := client.SystemOne(t.Context(), SystemOneRequest{
 		State:     "hi",
-		Questions: map[string]Question{"q": Noul{Instructions: "?"}},
+		Questions: map[string]Question{"spam": Noul{Instructions: "?"}},
 		Model:     "call-model",
 		Extra:     map[string]any{"model": "override-model", "beam_width": 4, "nullable": nil},
 	})
@@ -482,7 +487,7 @@ func TestConcurrentCalls(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var sent map[string]any
 		json.Unmarshal(body, &sent)
-		respondJSON(http.StatusOK, `{"model":"`+sent["model"].(string)+`","usage":{},"answers":{}}`)(w, r)
+		respondJSON(http.StatusOK, `{"model":"`+sent["model"].(string)+`","usage":{},`+noulAnswer+`}`)(w, r)
 	})
 
 	var wg sync.WaitGroup
@@ -725,7 +730,7 @@ func TestResponseSizeCap(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			prefix := `{"model":"m","usage":{},"answers":{},"pad":"`
+			prefix := `{"model":"m","usage":{},` + noulAnswer + `,"pad":"`
 			suffix := `"}`
 			fill := cap - len(prefix) - len(suffix) + tt.delta
 			body := prefix + strings.Repeat("x", fill) + suffix
@@ -786,7 +791,7 @@ func TestResponseSizeCapBoundsMemory(t *testing.T) {
 func TestResponseSizeCapDisabled(t *testing.T) {
 	t.Parallel()
 
-	body := `{"model":"m","usage":{},"answers":{},"pad":"` + strings.Repeat("x", 4096) + `"}`
+	body := `{"model":"m","usage":{},` + noulAnswer + `,"pad":"` + strings.Repeat("x", 4096) + `"}`
 	client, _ := newTestClient(t, respondJSON(http.StatusOK, body), WithMaxResponseBytes(0))
 
 	resp, err := client.SystemOne(t.Context(), noulRequest())
@@ -920,5 +925,53 @@ func TestStateEncodedOnce(t *testing.T) {
 	}
 	if got := string(sent["state"]); got != `{"subject":"hi","tags":["a"]}` {
 		t.Errorf("state = %s, want it embedded verbatim", got)
+	}
+}
+
+func TestSystemOneRejectsUnansweredQuestion(t *testing.T) {
+	t.Parallel()
+
+	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody, requestIDHeader, "req-partial"))
+
+	_, err := client.SystemOne(t.Context(), SystemOneRequest{
+		State: "hello",
+		Questions: map[string]Question{
+			"spam":    Noul{},
+			"missing": Noul{Instructions: "never answered"},
+		},
+	})
+
+	var responseErr *ResponseError
+	if !errors.As(err, &responseErr) {
+		t.Fatalf("SystemOne() error = %v, want *ResponseError", err)
+	}
+	if responseErr.Field != "answers.missing" {
+		t.Errorf("Field = %q, want answers.missing", responseErr.Field)
+	}
+	if responseErr.RequestID != "req-partial" {
+		t.Errorf("RequestID = %q, want it carried through", responseErr.RequestID)
+	}
+}
+
+func TestSystemOneAsToleratesPartialAnswers(t *testing.T) {
+	t.Parallel()
+
+	// SystemOneAs decodes the body as sent, so it is the way out of the
+	// answered-in-kind check when a partial response is acceptable.
+	type answers struct {
+		Model string `json:"model"`
+	}
+
+	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
+
+	got, err := client.SystemOneAs[answers](t.Context(), SystemOneRequest{
+		State:     "hello",
+		Questions: map[string]Question{"missing": Noul{Instructions: "never answered"}},
+	})
+	if err != nil {
+		t.Fatalf("SystemOneAs() error = %v, want a partial response tolerated", err)
+	}
+	if got.Model != "jev-latest" {
+		t.Errorf("Model = %q", got.Model)
 	}
 }

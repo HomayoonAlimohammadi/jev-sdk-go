@@ -119,6 +119,12 @@ resp.Scores["urgency"].Score        // float64
 resp.Scores["urgency"].Legend       // map[int]any
 ```
 
+Every question you ask must come back answered, and answered in kind, or the
+call fails with a `*jev.ResponseError` naming it. So reaching straight into
+these maps is safe — a name you asked about is there. Without that check a
+missing answer would surface as `NoulAnswer{}`, and a `Noul` of `0.0` reads as
+a confident "no".
+
 To decode into a type of your own, use `SystemOneAs`. The body is decoded as
 the API sends it, so the struct mirrors the wire shape:
 
@@ -134,6 +140,9 @@ type ticket struct {
 
 answers, err := client.SystemOneAs[ticket](ctx, req)
 ```
+
+`SystemOneAs` skips the answered-in-kind check, decoding whatever arrived, so
+it is also the way to accept a deliberately partial response.
 
 The untouched body is always on `resp.Raw`.
 

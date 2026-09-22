@@ -51,7 +51,7 @@ func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest, opts ...Ca
 	if err != nil {
 		return nil, err
 	}
-	return decodeSystemOne(meta, endpointLabel(http.MethodPost, c.baseURL+systemOnePath), c.transport.Logger)
+	return decodeSystemOne(meta, req.Questions, endpointLabel(http.MethodPost, c.baseURL+systemOnePath), c.transport.Logger)
 }
 
 // SystemOneAs answers the request and decodes the response body into T instead

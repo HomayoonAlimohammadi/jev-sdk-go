@@ -22,6 +22,8 @@ releases. Nothing under `internal/` carries a compatibility promise.
   a runaway server cannot exhaust memory.
 - Client-side validation that `State` encodes to a string, object or array, as
   the API requires.
+- A check that every question comes back answered, and answered in kind, so a
+  missing answer fails loudly instead of reading as a zero-valued one.
 - `APIError`, `TransportError` and `ResponseError`, with status-category
   sentinels matched through `errors.Is` and dotted field paths for unusable
   response bodies.

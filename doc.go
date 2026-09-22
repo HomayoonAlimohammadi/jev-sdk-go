@@ -44,8 +44,8 @@
 //     [ErrRateLimited], [ErrUnauthorized] and the other status sentinels to
 //     branch without inspecting status codes.
 //   - [*TransportError] when the request never reached the API.
-//   - [*ResponseError] when the response body was missing data the SDK needs.
-//     It names the offending field.
+//   - [*ResponseError] when the response body was missing data the SDK needs,
+//     or left one of your questions unanswered. It names the offending field.
 //
 // # Concurrency
 //
