@@ -1,0 +1,30 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - revive
+    - gosec
+    - misspell
+    - bodyclose
+    - errorlint
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          arguments: ["disableStutteringCheck"]
+
+  exclusions:
+    rules:
+      # Examples and tests favour readability over exhaustive error handling.
+      - path: (_test\.go|examples/)
+        linters: [errcheck, gosec]
+
+formatters:
+  enable:
+    - gofmt
