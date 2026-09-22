@@ -1,0 +1,20 @@
+{
+  "model": "jev-latest",
+  "usage": {"input_tokens": 120, "output_tokens": 12},
+  "answers": {
+    "spam": {"type": "noul", "noul": 0.98},
+    "tone": {
+      "type": "choice",
+      "choice": "angry",
+      "confidence": 0.9,
+      "probabilities": {"angry": 0.8, "calm": 0.1, "excited": 0.1}
+    },
+    "urgency": {
+      "type": "score",
+      "score": 1.7,
+      "confidence": 0.9,
+      "legend": {"0": "Can wait", "1": "Needs attention this week", "2": "Needs attention today"},
+      "probabilities": {"0": 0.1, "1": 0.1, "2": 0.8}
+    }
+  }
+}

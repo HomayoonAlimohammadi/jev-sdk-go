@@ -103,6 +103,16 @@ type Client struct {
 	header  http.Header
 	retry   RetryPolicy
 
+	// safeBaseURL is baseURL without credentials, computed once so no call
+	// has to parse a URL to label itself in logs and errors.
+	safeBaseURL string
+
+	// bodyHeader and plainHeader are the complete headers for a request with
+	// and without a body, built once. They are shared read-only: the transport
+	// clones before every attempt, so nothing ever writes through them.
+	bodyHeader  http.Header
+	plainHeader http.Header
+
 	maxResponseBytes int64
 	logBodies        bool
 
@@ -168,6 +178,10 @@ func New(opts ...ClientOption) (*Client, error) {
 		timeout: cfg.timeout,
 		header:  cfg.header,
 		retry:   cfg.retry,
+
+		safeBaseURL: safeURL(baseURL),
+		bodyHeader:  headerFor(apiKey, cfg.header, nil, true),
+		plainHeader: headerFor(apiKey, cfg.header, nil, false),
 
 		maxResponseBytes: cfg.maxResponseBytes,
 		logBodies:        cfg.logBodies,
@@ -268,13 +282,9 @@ func safeURL(rawURL string) string {
 	return parsed.String()
 }
 
-// endpointLabel describes a request for logs and errors.
-func endpointLabel(method, rawURL string) string {
-	sanitized := safeURL(rawURL)
-	if sanitized == "" {
-		return method
-	}
-	return method + " " + sanitized
+// endpoint describes a request for logs and errors, without credentials.
+func (c *Client) endpoint(method, path string) string {
+	return method + " " + c.safeBaseURL + path
 }
 
 // refuseRedirects stops the client from following a redirect. An API client has
@@ -286,21 +296,33 @@ func refuseRedirects(*http.Request, []*http.Request) error {
 	return http.ErrUseLastResponse
 }
 
-// buildHeader layers call headers over client headers, then stamps the
-// protected headers so neither layer can displace them.
+// buildHeader returns the headers for one call. Without call headers that is
+// the set built at construction, handed over as is.
 func (c *Client) buildHeader(call callConfig, hasBody bool) http.Header {
-	header := c.header.Clone()
+	if len(call.header) > 0 {
+		return headerFor(c.apiKey, c.header, call.header, hasBody)
+	}
+	if hasBody {
+		return c.bodyHeader
+	}
+	return c.plainHeader
+}
+
+// headerFor layers call headers over client headers, then stamps the
+// protected headers so neither layer can displace them.
+func headerFor(apiKey string, client, call http.Header, hasBody bool) http.Header {
+	header := client.Clone()
 	if header == nil {
 		header = http.Header{}
 	}
-	for name, values := range call.header {
+	for name, values := range call {
 		header[http.CanonicalHeaderKey(name)] = slices.Clone(values)
 	}
 	for _, name := range protectedHeaders {
 		header.Del(name)
 	}
 
-	header.Set(authorizationHeader, "Bearer "+c.apiKey)
+	header.Set(authorizationHeader, "Bearer "+apiKey)
 	header.Set(acceptHeader, jsonContentType)
 	header.Set(userAgentHeader, userAgent)
 	header.Set(sdkHeader, userAgent)
@@ -327,13 +349,12 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, call 
 		timeout = call.timeout
 	}
 
-	requestURL := c.baseURL + path
-	endpoint := endpointLabel(method, requestURL)
+	endpoint := c.endpoint(method, path)
 
 	req := transport.Request{
 		Method:           method,
-		URL:              requestURL,
-		SafeURL:          safeURL(requestURL),
+		URL:              c.baseURL + path,
+		SafeURL:          c.safeBaseURL + path,
 		Header:           c.buildHeader(call, body != nil),
 		Body:             body,
 		Timeout:          timeout,
@@ -348,7 +369,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, call 
 		return ResponseMeta{}, &TransportError{Endpoint: endpoint, Attempts: attempts, Err: err}
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return ResponseMeta{}, apiError(endpoint, resp)
+		apiErr := apiError(endpoint, resp)
+		apiErr.Attempts = attempts
+		return ResponseMeta{}, apiErr
 	}
 
 	// The transport reads one byte past the cap, so an overlong body is

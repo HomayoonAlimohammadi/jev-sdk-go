@@ -1,4 +1,4 @@
-.PHONY: build vet fmt lint test race cover vulncheck all
+.PHONY: build vet fmt lint test race cover bench vulncheck all
 
 all: fmt vet test
 
@@ -20,6 +20,9 @@ test:
 cover:
 	go test ./... -race -covermode=atomic -coverprofile=coverage.out
 	go tool cover -func=coverage.out | tail -1
+
+bench:
+	go test -run '^$$' -bench . -benchmem ./...
 
 integration:
 	go test ./... -tags=integration -run Integration -v

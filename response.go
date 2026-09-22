@@ -3,10 +3,7 @@ package jev
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
-	"maps"
 	"net/http"
-	"slices"
 	"strconv"
 )
 
@@ -14,7 +11,6 @@ import (
 // converted into a [ResponseError] carrying the offending field path.
 var (
 	errMissingField       = errors.New("missing or invalid field")
-	errUnknownAnswerKind  = errors.New("unrecognized answer type")
 	errMissingAnswer      = errors.New("no answer for this question")
 	errAnswerKindMismatch = errors.New("answer type does not match the question")
 )
@@ -88,26 +84,27 @@ type ListModelsResponse struct {
 }
 
 type systemOneWire struct {
-	Model   *string                    `json:"model"`
-	Usage   *Usage                     `json:"usage"`
-	Answers map[string]json.RawMessage `json:"answers"`
+	Model   *string               `json:"model"`
+	Usage   *Usage                `json:"usage"`
+	Answers map[string]answerWire `json:"answers"`
 }
 
 // decodeSystemOne parses a System One response body, reporting the first
 // field that is missing or structurally wrong.
-func decodeSystemOne(meta ResponseMeta, questions map[string]Question, endpoint string, logger *slog.Logger) (*SystemOneResponse, error) {
+//
+// Each answer is decoded exactly once. Where several things are wrong, the
+// report follows a fixed precedence rather than map order: a malformed answer
+// anywhere, then the top-level fields, then an unanswered question, then a
+// field-level problem, and within each the lowest answer or question name.
+func decodeSystemOne(meta ResponseMeta, questions map[string]Question, endpoint string) (*SystemOneResponse, error) {
 	var wire systemOneWire
 	if err := json.Unmarshal(meta.Raw, &wire); err != nil {
 		return nil, meta.invalid(endpoint, jsonFieldPath(err), err)
 	}
 
-	// Every answer's discriminator is checked before any field is decoded, so
-	// a malformed answer is reported ahead of a field-level problem elsewhere.
-	kinds, field, err := answerKinds(wire.Answers)
-	if err != nil {
-		return nil, meta.invalid(endpoint, field, err)
+	if name, malformed := firstUntyped(wire.Answers); malformed {
+		return nil, meta.invalid(endpoint, "answers."+name+".type", errMissingField)
 	}
-
 	if wire.Model == nil {
 		return nil, meta.invalid(endpoint, "model", errMissingField)
 	}
@@ -118,11 +115,11 @@ func decodeSystemOne(meta ResponseMeta, questions map[string]Question, endpoint 
 	// Every question asked must come back answered, and answered in kind. A map
 	// lookup on a missing answer would otherwise yield a zero value, and a
 	// NoulAnswer{} reads as a confident "no".
-	if field, err := checkAnswered(questions, kinds); err != nil {
+	if field, err := checkAnswered(questions, wire.Answers); err != nil {
 		return nil, meta.invalid(endpoint, field, err)
 	}
 
-	answers, field, err := decodeAnswers(wire.Answers, kinds, logger)
+	answers, field, err := decodeAnswers(wire.Answers)
 	if err != nil {
 		return nil, meta.invalid(endpoint, field, err)
 	}
@@ -139,25 +136,78 @@ func decodeSystemOne(meta ResponseMeta, questions map[string]Question, endpoint 
 	}, nil
 }
 
-// checkAnswered reports the first question that went unanswered, or was
-// answered by something other than what it asked for. Questions are visited in
-// sorted order so the reported path does not depend on map iteration.
-//
-// An answer of a kind this SDK version does not model still counts as
-// answered: it matches the question's type, and the payload stays on Raw.
-func checkAnswered(questions map[string]Question, kinds map[string]string) (string, error) {
-	for _, name := range sortedKeys(questions) {
-		want := questionKind(questions[name])
-
-		got, answered := kinds[name]
-		if !answered {
-			return "answers." + name, errMissingAnswer
-		}
-		if got != want {
-			return "answers." + name + ".type", errAnswerKindMismatch
+// firstUntyped reports the lowest-named answer that carries no string "type",
+// whether because the field is absent or because the answer is not an object.
+func firstUntyped(answers map[string]answerWire) (string, bool) {
+	var (
+		found bool
+		first string
+	)
+	for name, answer := range answers {
+		if !answer.typed() && (!found || name < first) {
+			found, first = true, name
 		}
 	}
-	return "", nil
+	return first, found
+}
+
+// decodeAnswers converts every answer, reporting the field-level problem of
+// the lowest-named answer that has one. An answer of a kind this SDK version
+// does not model is kept as an [UnknownAnswer].
+func decodeAnswers(wires map[string]answerWire) (map[string]Answer, string, error) {
+	answers := make(map[string]Answer, len(wires))
+
+	var (
+		failed    bool
+		firstName string
+		firstPath string
+		firstErr  error
+	)
+	for name, wire := range wires {
+		if failed && name >= firstName {
+			continue
+		}
+
+		answer, field, err := wire.decode()
+		if err != nil {
+			failed, firstName, firstPath, firstErr = true, name, joinPath("answers."+name, field), err
+			continue
+		}
+		answers[name] = answer
+	}
+
+	if failed {
+		return nil, firstPath, firstErr
+	}
+	return answers, "", nil
+}
+
+// checkAnswered reports the lowest-named question that went unanswered, or was
+// answered by something other than what it asked for.
+//
+// An answer of a kind this SDK version does not model still counts as
+// answered: it matches the question's type, and the payload is kept.
+func checkAnswered(questions map[string]Question, answers map[string]answerWire) (string, error) {
+	var (
+		failed    bool
+		firstName string
+		firstPath string
+		firstErr  error
+	)
+	for name, question := range questions {
+		if failed && name >= firstName {
+			continue
+		}
+
+		answer, answered := answers[name]
+		switch {
+		case !answered:
+			failed, firstName, firstPath, firstErr = true, name, "answers."+name, errMissingAnswer
+		case *answer.Type != questionKind(question):
+			failed, firstName, firstPath, firstErr = true, name, "answers."+name+".type", errAnswerKindMismatch
+		}
+	}
+	return firstPath, firstErr
 }
 
 type modelWire struct {
@@ -240,8 +290,4 @@ func joinPath(prefix, field string) string {
 
 func indexedPath(prefix string, index int, field string) string {
 	return joinPath(prefix+"["+strconv.Itoa(index)+"]", field)
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	return slices.Sorted(maps.Keys(m))
 }

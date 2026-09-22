@@ -235,3 +235,48 @@ func FuzzParseRetryAfter(f *testing.F) {
 		}
 	})
 }
+
+func TestMaxRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	always := func(*APIError, error) bool { return true }
+
+	tests := []struct {
+		name       string
+		policy     RetryPolicy
+		retryAfter time.Duration
+		want       bool
+	}{
+		{"under the cap", RetryPolicy{RetryStatuses: []int{429}, RespectRetryAfter: true, MaxRetryAfter: time.Minute}, 30 * time.Second, true},
+		{"at the cap", RetryPolicy{RetryStatuses: []int{429}, RespectRetryAfter: true, MaxRetryAfter: time.Minute}, time.Minute, true},
+		// The server asked for longer than the caller will wait: return now,
+		// with the request in RetryAfter, rather than hammering it with backoff.
+		{"over the cap", RetryPolicy{RetryStatuses: []int{429}, RespectRetryAfter: true, MaxRetryAfter: time.Minute}, 2 * time.Minute, false},
+		{"no cap", RetryPolicy{RetryStatuses: []int{429}, RespectRetryAfter: true}, time.Hour, true},
+		{"header ignored, so no cap", RetryPolicy{RetryStatuses: []int{429}, MaxRetryAfter: time.Minute}, time.Hour, true},
+		{"predicate cannot override the cap", RetryPolicy{RespectRetryAfter: true, MaxRetryAfter: time.Minute, Retry: always}, time.Hour, false},
+		{"no header at all", RetryPolicy{RetryStatuses: []int{429}, RespectRetryAfter: true, MaxRetryAfter: time.Minute}, 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			apiErr := &APIError{StatusCode: 429, RetryAfter: tt.retryAfter}
+			if got := tt.policy.retryable(apiErr, nil); got != tt.want {
+				t.Errorf("retryable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultRetryPolicyCapsRetryAfter(t *testing.T) {
+	t.Parallel()
+
+	if got := DefaultRetryPolicy().MaxRetryAfter; got != time.Minute {
+		t.Errorf("DefaultRetryPolicy().MaxRetryAfter = %v, want 1m", got)
+	}
+	if err := (RetryPolicy{MaxRetryAfter: -1}).validate(); !errors.Is(err, ErrInvalidRetry) {
+		t.Errorf("validate() error = %v, want ErrInvalidRetry for a negative cap", err)
+	}
+}

@@ -51,7 +51,7 @@ func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest, opts ...Ca
 	if err != nil {
 		return nil, err
 	}
-	return decodeSystemOne(meta, req.Questions, endpointLabel(http.MethodPost, c.baseURL+systemOnePath), c.transport.Logger)
+	return decodeSystemOne(meta, req.Questions, c.endpoint(http.MethodPost, systemOnePath))
 }
 
 // SystemOneAs answers the request and decodes the response body into T instead
@@ -85,8 +85,7 @@ func (c *Client) SystemOneAs[T any](ctx context.Context, req SystemOneRequest, o
 
 	out := new(T)
 	if err := json.Unmarshal(meta.Raw, out); err != nil {
-		endpoint := endpointLabel(http.MethodPost, c.baseURL+systemOnePath)
-		return nil, meta.invalid(endpoint, jsonFieldPath(err), err)
+		return nil, meta.invalid(c.endpoint(http.MethodPost, systemOnePath), jsonFieldPath(err), err)
 	}
 
 	// Opt-in metadata: a T that embeds ResponseMeta gets it filled in.

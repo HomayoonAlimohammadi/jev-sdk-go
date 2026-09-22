@@ -27,6 +27,34 @@ releases. Nothing under `internal/` carries a compatibility promise.
 - `WithBodyLogging`, off by default, so request and response bodies no longer
   reach debug logs unless asked for.
 
+- Typed questions and answers: `ChoiceOf[T]` and `ScoreOf[L]` take labels and
+  levels of your own types, and `Ask` returns a typed `Key` whose `Answer`
+  reads the answer back in them, refusing a choice the question never offered
+  or a level outside its rubric. `Choice` and `Score` are now
+  `ChoiceOf[string]` and `ScoreOf[int]`, so existing code is unchanged.
+- `ChoiceAnswerOf.Ranked`, `ScoreAnswerOf.Level` and
+  `ScoreAnswerOf.Description`.
+- `LabelsOf`, the typed form of `Labels`.
+- `UnknownAnswer`: an answer of a kind this version does not model is kept
+  with its payload instead of being dropped.
+- `RetryPolicy.MaxRetryAfter`, a minute by default: a server asking for a
+  longer wait is not retried, and its request is returned in
+  `APIError.RetryAfter`.
+- `APIError.Attempts`.
+- Validation of the API's limits before sending: 255 choices, 1 to 10
+  non-null score levels, a `Noul` that asks something, and non-empty question
+  names.
+- Benchmarks, fixtures assembled from the API schema's examples under
+  `testdata/`, a golden request encoding, and an integration test that records
+  live responses for the unit tests to decode.
+
+### Changed
+
+- Each answer is decoded once rather than twice, validation no longer sorts
+  or allocates, disabled logging no longer builds log records, and the base
+  URL and protected headers are prepared once per client rather than per call:
+  about 22% fewer allocations and 9% less time per call.
+
 ### Security
 
 - The SDK's HTTP client refuses to follow redirects, which could otherwise hand

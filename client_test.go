@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -145,7 +146,7 @@ func TestSystemOneValidatesBeforeSending(t *testing.T) {
 		{"empty score", SystemOneRequest{State: "x", Questions: map[string]Question{"r": Score{}}}, ErrInvalidQuestion},
 		{
 			"unencodable extra",
-			SystemOneRequest{State: "x", Questions: map[string]Question{"spam": Noul{}}, Extra: map[string]any{"bad": make(chan int)}},
+			SystemOneRequest{State: "x", Questions: map[string]Question{"spam": Noul{Instructions: "?"}}, Extra: map[string]any{"bad": make(chan int)}},
 			ErrEncodeRequest,
 		},
 	}
@@ -938,7 +939,7 @@ func TestSystemOneRejectsUnansweredQuestion(t *testing.T) {
 	_, err := client.SystemOne(t.Context(), SystemOneRequest{
 		State: "hello",
 		Questions: map[string]Question{
-			"spam":    Noul{},
+			"spam":    Noul{Instructions: "Spam?"},
 			"missing": Noul{Instructions: "never answered"},
 		},
 	})
@@ -1205,5 +1206,126 @@ func TestErrorsOmitBaseURLCredentials(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "base-url-credential") {
 		t.Errorf("error leaked the base URL credential: %v", err)
+	}
+}
+
+func TestMaxRetryAfterEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set(retryAfterHeader, "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}, WithRetry(DefaultRetryPolicy()))
+
+	start := time.Now()
+	_, err := client.ListModels(t.Context())
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ListModels() error = %v, want *APIError", err)
+	}
+	// Two minutes exceeds the default one-minute cap: no retry, no waiting,
+	// and the server's request handed back for the caller to schedule.
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("made %d attempts, want 1", got)
+	}
+	if apiErr.RetryAfter != 2*time.Minute {
+		t.Errorf("RetryAfter = %v, want 2m", apiErr.RetryAfter)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("call took %v, want it to return at once", elapsed)
+	}
+}
+
+func TestAPIErrorAttempts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		policy RetryPolicy
+		want   int
+	}{
+		{"no retries", RetryPolicy{}, 1},
+		{"exhausted retries", RetryPolicy{MaxRetries: 2, RetryStatuses: []int{http.StatusServiceUnavailable}}, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, _ := newTestClient(t, respondJSON(http.StatusServiceUnavailable, `{"message":"down"}`), WithRetry(tt.policy))
+			_, err := client.ListModels(t.Context())
+
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("ListModels() error = %v, want *APIError", err)
+			}
+			if apiErr.Attempts != tt.want {
+				t.Errorf("Attempts = %d, want %d", apiErr.Attempts, tt.want)
+			}
+		})
+	}
+}
+
+func TestSharedHeadersUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
+	// Calls without call headers share one precomputed header set, which the
+	// transport clones per attempt. Calls with them build their own. Mixing
+	// both concurrently, with retries adding a header per attempt, must neither
+	// race nor leak a header from one call into another.
+	var mu sync.Mutex
+	seen := map[string][]string{}
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		call := r.Header.Get("X-Call")
+		seen[call] = append(seen[call], r.Header.Get(retryCountHeader))
+		mu.Unlock()
+
+		if r.Header.Get(retryCountHeader) == "" {
+			w.Header().Set(retryAfterMsHeader, "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		respondJSON(http.StatusOK, `{"models":[]}`)(w, r)
+	}, WithHeader("X-Client", "kept"), WithRetry(RetryPolicy{MaxRetries: 1, RetryStatuses: []int{http.StatusTooManyRequests}, RespectRetryAfter: true}))
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			var opts []CallOption
+			if i%2 == 0 {
+				opts = append(opts, WithCallHeader("X-Call", strconv.Itoa(i)))
+			}
+			if _, err := client.ListModels(t.Context(), opts...); err != nil {
+				t.Errorf("ListModels() error = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Every call header was seen on exactly its own two attempts.
+	for i := 0; i < 16; i += 2 {
+		if got := seen[strconv.Itoa(i)]; len(got) != 2 {
+			t.Errorf("call %d was seen %d times, want 2", i, len(got))
+		}
+	}
+	// The eight calls without one never picked one up.
+	if got := len(seen[""]); got != 16 {
+		t.Errorf("calls without a call header made %d attempts, want 16", got)
+	}
+
+	// The shared set was never written through.
+	if client.plainHeader.Get(retryCountHeader) != "" || client.plainHeader.Get("X-Call") != "" {
+		t.Errorf("the shared header set was mutated: %v", client.plainHeader)
+	}
+	if client.plainHeader.Get("X-Client") != "kept" {
+		t.Errorf("the shared header set lost the client header: %v", client.plainHeader)
 	}
 }

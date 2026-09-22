@@ -19,5 +19,5 @@ func (c *Client) ListModels(ctx context.Context, opts ...CallOption) (*ListModel
 	if err != nil {
 		return nil, err
 	}
-	return decodeListModels(meta, endpointLabel(http.MethodGet, c.baseURL+modelsPath))
+	return decodeListModels(meta, c.endpoint(http.MethodGet, modelsPath))
 }

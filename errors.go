@@ -71,6 +71,10 @@ type APIError struct {
 	// RetryAfter is the delay the server asked for, from the retry-after or
 	// retry-after-ms headers. It is zero when the server did not ask.
 	RetryAfter time.Duration
+
+	// Attempts is how many attempts were made, retries included, before this
+	// response was returned.
+	Attempts int
 }
 
 func (e *APIError) Error() string {

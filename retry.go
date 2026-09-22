@@ -42,6 +42,16 @@ type RetryPolicy struct {
 	// headers in place of the computed backoff.
 	RespectRetryAfter bool
 
+	// MaxRetryAfter caps how long a single server-requested delay is waited
+	// out when RespectRetryAfter is set. A response asking for longer is not
+	// retried: it is returned at once, with the requested delay in
+	// [APIError.RetryAfter], so the caller can schedule the retry instead of a
+	// goroutine being parked on it. Zero places no cap.
+	//
+	// Falling back to the computed backoff instead, as some clients do, would
+	// retry within a second a server that asked for minutes.
+	MaxRetryAfter time.Duration
+
 	// RetryTransport retries failures that produced no HTTP response, such as
 	// connection errors and timeouts.
 	RetryTransport bool
@@ -58,8 +68,8 @@ type RetryPolicy struct {
 }
 
 // DefaultRetryPolicy returns the policy a client uses when none is set: two
-// retries with exponential backoff from 500ms to 5s, honoring Retry-After,
-// within a 30s budget.
+// retries with exponential backoff from 500ms to 5s, honoring Retry-After up to
+// a minute, within a 30s budget.
 func DefaultRetryPolicy() RetryPolicy {
 	statuses := []int{http.StatusRequestTimeout, http.StatusTooManyRequests}
 	for status := 500; status < 600; status++ {
@@ -73,6 +83,7 @@ func DefaultRetryPolicy() RetryPolicy {
 		BackoffJitter:     0.25,
 		RetryStatuses:     statuses,
 		RespectRetryAfter: true,
+		MaxRetryAfter:     time.Minute,
 		RetryTransport:    true,
 		Budget:            30 * time.Second,
 	}
@@ -94,12 +105,21 @@ func (p RetryPolicy) validate() error {
 	if p.Budget < 0 {
 		return fmt.Errorf("%w: Budget must not be negative", ErrInvalidRetry)
 	}
+	if p.MaxRetryAfter < 0 {
+		return fmt.Errorf("%w: MaxRetryAfter must not be negative", ErrInvalidRetry)
+	}
 	return nil
 }
 
 // retryable reports whether a failed attempt should be tried again. Exactly
 // one of apiErr and err is non-nil.
 func (p RetryPolicy) retryable(apiErr *APIError, err error) bool {
+	// A server that asked for a longer wait than the cap is taken at its word:
+	// no rule, including the caller's own predicate, overrides that.
+	if apiErr != nil && p.RespectRetryAfter && p.MaxRetryAfter > 0 && apiErr.RetryAfter > p.MaxRetryAfter {
+		return false
+	}
+
 	switch {
 	case apiErr != nil:
 		for _, status := range p.RetryStatuses {

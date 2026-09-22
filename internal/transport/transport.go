@@ -130,7 +130,11 @@ func (c *Client) Send(ctx context.Context, req Request, policy Policy) (*Respons
 			break
 		}
 
-		c.Logger.Info("jev: retrying", "method", req.Method, "url", req.SafeURL, "retry", attempt, "delay", delay)
+		// Arguments are boxed into ...any before slog can check the level, so
+		// every call site guards itself: logging off must cost nothing.
+		if c.Logger.Enabled(ctx, slog.LevelInfo) {
+			c.Logger.Info("jev: retrying", "method", req.Method, "url", req.SafeURL, "retry", attempt, "delay", delay)
+		}
 		if err := c.Sleep(ctx, delay); err != nil {
 			return nil, attempt, err
 		}
@@ -176,7 +180,9 @@ func (c *Client) attempt(ctx context.Context, req Request, attempt int) (*Respon
 	started := c.Now()
 	httpResp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		c.Logger.Info("jev: request failed", "method", req.Method, "url", req.SafeURL, "error", err)
+		if c.Logger.Enabled(ctx, slog.LevelInfo) {
+			c.Logger.Info("jev: request failed", "method", req.Method, "url", req.SafeURL, "error", err)
+		}
 		return nil, err
 	}
 	// The body is read in full below, so a close error carries no information.
@@ -195,7 +201,9 @@ func (c *Client) attempt(ctx context.Context, req Request, attempt int) (*Respon
 
 	payload, err := io.ReadAll(reader)
 	if err != nil {
-		c.Logger.Info("jev: response body unreadable", "method", req.Method, "url", req.SafeURL, "error", err)
+		if c.Logger.Enabled(ctx, slog.LevelInfo) {
+			c.Logger.Info("jev: response body unreadable", "method", req.Method, "url", req.SafeURL, "error", err)
+		}
 		return nil, err
 	}
 

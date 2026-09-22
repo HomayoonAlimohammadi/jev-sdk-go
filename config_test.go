@@ -202,7 +202,7 @@ func TestSuppliedHTTPClientIsUsedUnmodified(t *testing.T) {
 	}
 }
 
-func TestEndpointLabelStripsCredentials(t *testing.T) {
+func TestSafeURLStripsCredentials(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -210,23 +210,46 @@ func TestEndpointLabelStripsCredentials(t *testing.T) {
 		url  string
 		want string
 	}{
-		{"plain", "https://api.typesafe.ai/v1/models", "GET https://api.typesafe.ai/v1/models"},
-		{"userinfo", "https://user:secret@api.typesafe.ai/v1/models", "GET https://api.typesafe.ai/v1/models"},
-		{"query and fragment", "https://api.typesafe.ai/v1/models?token=secret#frag", "GET https://api.typesafe.ai/v1/models"},
+		{"plain", "https://api.typesafe.ai/v1/models", "https://api.typesafe.ai/v1/models"},
+		{"userinfo", "https://user:secret@api.typesafe.ai/v1/models", "https://api.typesafe.ai/v1/models"},
+		{"query and fragment", "https://api.typesafe.ai/v1/models?token=secret#frag", "https://api.typesafe.ai/v1/models"},
+		{"unparseable", "://bad", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := endpointLabel(http.MethodGet, tt.url)
+			got := safeURL(tt.url)
 			if got != tt.want {
-				t.Errorf("endpointLabel() = %q, want %q", got, tt.want)
+				t.Errorf("safeURL() = %q, want %q", got, tt.want)
 			}
 			if strings.Contains(got, "secret") {
-				t.Errorf("endpointLabel() leaked a credential: %q", got)
+				t.Errorf("safeURL() leaked a credential: %q", got)
 			}
 		})
+	}
+}
+
+func TestEndpointIsBuiltFromTheSanitizedBase(t *testing.T) {
+	clearEnv(t)
+
+	client, err := New(WithAPIKey("k"), WithBaseURL("https://svc:secret@gw.test/jev"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	// The endpoint is precomputed from the base once, so it must match what
+	// sanitizing each full URL would have produced.
+	if got, want := client.endpoint(http.MethodGet, modelsPath), "GET https://gw.test/jev/v1/models"; got != want {
+		t.Errorf("endpoint() = %q, want %q", got, want)
+	}
+	if want := "https://gw.test/jev/v1/models"; safeURL(client.baseURL+modelsPath) != want {
+		t.Errorf("sanitizing the full URL = %q, want %q", safeURL(client.baseURL+modelsPath), want)
+	}
+	// The wire URL keeps the credentials; only labels drop them.
+	if !strings.Contains(client.baseURL, "svc:secret@") {
+		t.Errorf("baseURL = %q, want the credentials kept for the request itself", client.baseURL)
 	}
 }
 

@@ -1,15 +1,13 @@
 package jev
 
 import (
+	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-func discard() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 func meta(body string) ResponseMeta {
 	return ResponseMeta{
@@ -35,7 +33,7 @@ const systemOneBody = `{
 func TestDecodeSystemOne(t *testing.T) {
 	t.Parallel()
 
-	got, err := decodeSystemOne(meta(systemOneBody), nil, "POST https://x/v1/systemone", discard())
+	got, err := decodeSystemOne(meta(systemOneBody), nil, "POST https://x/v1/systemone")
 	if err != nil {
 		t.Fatalf("decodeSystemOne() error = %v", err)
 	}
@@ -121,7 +119,7 @@ func TestDecodeSystemOneInvalid(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := decodeSystemOne(meta(tt.body), nil, "POST https://x/v1/systemone", discard())
+			_, err := decodeSystemOne(meta(tt.body), nil, "POST https://x/v1/systemone")
 
 			var responseErr *ResponseError
 			if !errors.As(err, &responseErr) {
@@ -152,29 +150,35 @@ func TestDecodeSystemOneTolerance(t *testing.T) {
 	  }
 	}`
 
-	got, err := decodeSystemOne(meta(body), nil, "", discard())
+	got, err := decodeSystemOne(meta(body), nil, "")
 	if err != nil {
 		t.Fatalf("decodeSystemOne() error = %v", err)
 	}
 
 	// Unknown extra fields are ignored; an answer kind this version does not
-	// model is dropped rather than failing the response.
-	if len(got.Answers) != 1 || got.Nouls["spam"].Noul != 0.9 {
-		t.Errorf("Answers = %v, want only the noul", got.Answers)
+	// model is kept, with its payload, rather than failing the response.
+	if got.Nouls["spam"].Noul != 0.9 {
+		t.Errorf("Nouls[spam] = %+v, want 0.9", got.Nouls["spam"])
 	}
-	if _, ok := got.Answers["mystery"]; ok {
-		t.Error("Answers kept an unrecognized answer type")
+	unknown, ok := got.Answers["mystery"].(UnknownAnswer)
+	if !ok {
+		t.Fatalf("Answers[mystery] = %#v, want an UnknownAnswer", got.Answers["mystery"])
 	}
-	// It is still reachable through the raw body.
-	if !strings.Contains(string(got.Raw), "aurora") {
-		t.Error("Raw lost the unrecognized answer")
+	if unknown.Type != "aurora" {
+		t.Errorf("UnknownAnswer.Type = %q, want aurora", unknown.Type)
+	}
+	var payload struct {
+		Value int `json:"value"`
+	}
+	if err := json.Unmarshal(unknown.Raw, &payload); err != nil || payload.Value != 3 {
+		t.Errorf("UnknownAnswer.Raw = %s, want the answer as sent", unknown.Raw)
 	}
 }
 
 func TestDecodeSystemOneUsageOptional(t *testing.T) {
 	t.Parallel()
 
-	got, err := decodeSystemOne(meta(`{"model":"m","usage":{},"answers":{}}`), nil, "", discard())
+	got, err := decodeSystemOne(meta(`{"model":"m","usage":{},"answers":{}}`), nil, "")
 	if err != nil {
 		t.Fatalf("decodeSystemOne() error = %v", err)
 	}
@@ -313,7 +317,7 @@ func TestCheckAnswered(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := decodeSystemOne(meta(body), tt.questions, "POST https://x/v1/systemone", discard())
+			_, err := decodeSystemOne(meta(body), tt.questions, "POST https://x/v1/systemone")
 
 			if tt.want == "" {
 				if err != nil {
@@ -340,16 +344,14 @@ func TestCheckAnsweredAllowsUnmodeledKinds(t *testing.T) {
 	// as answered: the escape hatch must keep working, with the payload on Raw.
 	const body = `{"model":"m","usage":{},"answers":{"mystery":{"type":"aurora","value":3}}}`
 
-	got, err := decodeSystemOne(meta(body), map[string]Question{"mystery": RawQuestion{"type": "aurora"}}, "", discard())
+	got, err := decodeSystemOne(meta(body), map[string]Question{"mystery": RawQuestion{"type": "aurora"}}, "")
 	if err != nil {
 		t.Fatalf("decodeSystemOne() error = %v, want the unmodeled answer tolerated", err)
 	}
 
-	if len(got.Answers) != 0 {
-		t.Errorf("Answers = %v, want the unmodeled answer dropped", got.Answers)
-	}
-	if !strings.Contains(string(got.Raw), "aurora") {
-		t.Error("Raw lost the unmodeled answer")
+	unknown, ok := got.Answers["mystery"].(UnknownAnswer)
+	if !ok || unknown.Type != "aurora" || !strings.Contains(string(unknown.Raw), `"value":3`) {
+		t.Errorf("Answers[mystery] = %#v, want the unmodeled answer kept with its payload", got.Answers["mystery"])
 	}
 }
 
@@ -360,7 +362,7 @@ func TestCheckAnsweredIsDeterministic(t *testing.T) {
 	questions := map[string]Question{"zulu": Noul{}, "alpha": Noul{}}
 
 	for range 20 {
-		_, err := decodeSystemOne(meta(`{"model":"m","usage":{},"answers":{}}`), questions, "", discard())
+		_, err := decodeSystemOne(meta(`{"model":"m","usage":{},"answers":{}}`), questions, "")
 
 		var responseErr *ResponseError
 		if !errors.As(err, &responseErr) {
@@ -379,7 +381,7 @@ func TestCheckAnsweredRunsBeforeFieldDecoding(t *testing.T) {
 	// the caller's own question is the more useful thing to name.
 	const body = `{"model":"m","usage":{},"answers":{"zulu":{"type":"noul"}}}`
 
-	_, err := decodeSystemOne(meta(body), map[string]Question{"alpha": Noul{}, "zulu": Noul{}}, "", discard())
+	_, err := decodeSystemOne(meta(body), map[string]Question{"alpha": Noul{}, "zulu": Noul{}}, "")
 
 	var responseErr *ResponseError
 	if !errors.As(err, &responseErr) {

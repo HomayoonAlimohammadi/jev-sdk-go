@@ -75,6 +75,10 @@ func (c *Client) logRequest(ctx context.Context, req Request, header http.Header
 }
 
 func (c *Client) logResponse(ctx context.Context, req Request, resp *http.Response, body []byte, elapsed time.Duration) {
+	if !c.Logger.Enabled(ctx, slog.LevelInfo) {
+		return
+	}
+
 	var requestID string
 	if req.RequestIDHeader != "" {
 		requestID = resp.Header.Get(req.RequestIDHeader)

@@ -35,6 +35,25 @@
 // state against an ordered rubric. [RawQuestion] passes an arbitrary object
 // through, for question kinds the API accepts before this package models them.
 //
+// # Typed answers
+//
+// [ChoiceOf] and [ScoreOf] take labels and levels of the caller's own types.
+// Register each question with [Ask], which returns a typed [Key]; its answer
+// comes back in that type, and is checked against what the question offered:
+//
+//	req := jev.SystemOneRequest{State: ticket}
+//	team := jev.Ask(&req, "team", jev.ChoiceOf[Team]{Criteria: jev.LabelsOf(Billing, Technical)})
+//
+//	resp, err := client.SystemOne(ctx, req)
+//	// ...
+//	t, err := team.Answer(resp) // t.Choice is a Team
+//
+// [Choice] and [Score] are ChoiceOf[string] and ScoreOf[int], so everything
+// written against them works unchanged. Answers carry their readings:
+// [ChoiceAnswerOf.Ranked] orders the labels by probability, and
+// [ScoreAnswerOf.Level] rounds a score to its rubric level. An answer of a kind
+// this version does not model arrives as an [UnknownAnswer].
+//
 // # Errors
 //
 // Failures come back as one of three types, each recoverable with
@@ -57,8 +76,8 @@
 //
 // By default a call is retried twice on 408, 429 and 5xx responses and on
 // transport failures, with exponential backoff, honoring the server's
-// Retry-After, within a 30 second budget. See [RetryPolicy] to change or
-// disable that, per client or per call.
+// Retry-After up to a minute, within a 30 second budget. See [RetryPolicy] to
+// change or disable that, per client or per call.
 //
 // # Logging
 //
@@ -67,6 +86,12 @@
 // response bodies are left out unless [WithBodyLogging] asks for them: the
 // request body is the state being evaluated, so it carries whatever the
 // caller's content carries.
+//
+// # Observability
+//
+// There is no tracing dependency. Wrap the transport of the [http.Client]
+// passed to [WithHTTPClient], with OpenTelemetry's otelhttp for example, and
+// quote the RequestID every response and error carries in a support ticket.
 //
 // Learn what TypeSafe is and what it can do at https://docs.typesafe.ai.
 package jev

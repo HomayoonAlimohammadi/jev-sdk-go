@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -174,5 +175,24 @@ func TestLoggingIncludesBodiesAtDebug(t *testing.T) {
 				t.Errorf("request id logged = %v, want %v", got, tt.wantInfo)
 			}
 		})
+	}
+}
+
+func TestDisabledLoggingAllocatesNothing(t *testing.T) {
+	// slog boxes arguments into ...any before it can check the level, so each
+	// call site must check first. A client that logs nothing must pay nothing.
+	client := newClient(newClock())
+	req := request("https://api.test/v1/models")
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Request-Id": []string{"req-1"}}}
+	body := []byte(`{"models":[]}`)
+	ctx := context.Background()
+
+	for name, logCall := range map[string]func(){
+		"request":  func() { client.logRequest(ctx, req, req.Header) },
+		"response": func() { client.logResponse(ctx, req, resp, body, time.Millisecond) },
+	} {
+		if allocs := testing.AllocsPerRun(100, logCall); allocs != 0 {
+			t.Errorf("%s logging allocated %v times per run with logging off, want 0", name, allocs)
+		}
 	}
 }

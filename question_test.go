@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -90,8 +91,8 @@ func TestValidateQuestions(t *testing.T) {
 		{"empty", map[string]Question{}, ErrNoQuestions},
 		{"nil map", nil, ErrNoQuestions},
 
-		{"noul", map[string]Question{"q": Noul{}}, nil},
-		{"noul pointer", map[string]Question{"q": &Noul{}}, nil},
+		{"noul", map[string]Question{"q": Noul{Instructions: "Spam?"}}, nil},
+		{"noul pointer", map[string]Question{"q": &Noul{Instructions: "Spam?"}}, nil},
 		{"choice", map[string]Question{"q": Choice{Criteria: map[string]any{"a": nil}}}, nil},
 		{"score", map[string]Question{"q": Score{Criteria: []any{"good"}}}, nil},
 
@@ -139,7 +140,7 @@ func TestValidateQuestionsIsDeterministic(t *testing.T) {
 		if err == nil || !errors.Is(err, ErrInvalidQuestion) {
 			t.Fatalf("validateQuestions() error = %v", err)
 		}
-		if want := `choice question "a"`; !strings.Contains(err.Error(), want) {
+		if want := `question "a"`; !strings.Contains(err.Error(), want) {
 			t.Fatalf("validateQuestions() = %q, want it to name %s", err, want)
 		}
 	}
@@ -345,5 +346,197 @@ func TestLevelsEmptyIsRejected(t *testing.T) {
 	err := validateQuestions(map[string]Question{"q": Score{Criteria: Levels()}})
 	if !errors.Is(err, ErrInvalidQuestion) {
 		t.Errorf("validateQuestions() error = %v, want ErrInvalidQuestion", err)
+	}
+}
+
+// Team and Urgency stand in for the caller's own label and level types.
+type Team string
+
+const (
+	Billing   Team = "billing"
+	Technical Team = "technical"
+)
+
+type Urgency int
+
+const (
+	CanWait Urgency = iota
+	ThisWeek
+	Today
+)
+
+func TestServiceLimits(t *testing.T) {
+	t.Parallel()
+
+	labels := func(n int) map[string]any {
+		criteria := make(map[string]any, n)
+		for i := range n {
+			criteria[strconv.Itoa(i)] = nil
+		}
+		return criteria
+	}
+	levels := func(n int) []any {
+		criteria := make([]any, n)
+		for i := range criteria {
+			criteria[i] = strconv.Itoa(i)
+		}
+		return criteria
+	}
+
+	tests := []struct {
+		name     string
+		question Question
+		wantErr  bool
+	}{
+		// A noul must ask something: instructions, or a described outcome.
+		{"noul with instructions", Noul{Instructions: "Spam?"}, false},
+		{"noul with only a yes criterion", Noul{Criteria: &NoulCriteria{True: "Advertising"}}, false},
+		{"noul with only a no criterion", Noul{Criteria: &NoulCriteria{False: "A real message"}}, false},
+		{"noul with an empty but present criterion", Noul{Criteria: &NoulCriteria{True: ""}}, false},
+		{"noul with structured instructions", Noul{Instructions: map[string]any{"task": "spam?"}}, false},
+		{"empty noul", Noul{}, true},
+		{"noul with empty string instructions", Noul{Instructions: ""}, true},
+		{"noul with empty object instructions", Noul{Instructions: map[string]any{}}, true},
+		{"noul with empty array instructions", Noul{Instructions: []any{}}, true},
+		{"noul with typed nil instructions", Noul{Instructions: map[string]any(nil)}, true},
+		{"noul with empty criteria", Noul{Criteria: &NoulCriteria{}}, true},
+		{"noul with typed nil criteria", Noul{Criteria: &NoulCriteria{True: []any(nil)}}, true},
+
+		{"choice at the cap", Choice{Criteria: labels(maxChoiceOptions)}, false},
+		{"choice over the cap", Choice{Criteria: labels(maxChoiceOptions + 1)}, true},
+
+		// The live service accepts one level, although the docs describe two.
+		{"score of one level", Score{Criteria: levels(1)}, false},
+		{"score at the cap", Score{Criteria: levels(maxScoreLevels)}, false},
+		{"score over the cap", Score{Criteria: levels(maxScoreLevels + 1)}, true},
+		{"score with a null level", Score{Criteria: []any{"low", nil, "high"}}, true},
+		{"score with a typed nil level", Score{Criteria: []any{"low", map[string]any(nil)}}, true},
+		{"score with structured levels", Score{Criteria: []any{map[string]any{"meaning": "low"}, []any{"high"}}}, false},
+
+		{"typed choice", ChoiceOf[Team]{Criteria: LabelsOf(Billing, Technical)}, false},
+		{"typed choice without criteria", ChoiceOf[Team]{}, true},
+		{"typed score", ScoreOf[Urgency]{Criteria: Levels("can wait", "this week", "today")}, false},
+		{"typed score over the cap", ScoreOf[Urgency]{Criteria: levels(maxScoreLevels + 1)}, true},
+		{"pointer to typed choice", &ChoiceOf[Team]{Criteria: LabelsOf(Billing)}, false},
+		{"nil pointer to typed choice", (*ChoiceOf[Team])(nil), true},
+		{"nil pointer to typed score", (*ScoreOf[Urgency])(nil), true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateQuestions(map[string]Question{"q": tt.question})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateQuestions() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil && !errors.Is(err, ErrInvalidQuestion) {
+				t.Errorf("validateQuestions() error = %v, want it to wrap ErrInvalidQuestion", err)
+			}
+		})
+	}
+}
+
+func TestEmptyQuestionNameRejected(t *testing.T) {
+	t.Parallel()
+
+	err := validateQuestions(map[string]Question{"": Noul{Instructions: "?"}})
+	if !errors.Is(err, ErrInvalidQuestion) {
+		t.Errorf("validateQuestions() error = %v, want ErrInvalidQuestion", err)
+	}
+}
+
+func TestValidateQuestionsAllocatesNothing(t *testing.T) {
+	// The checks run on every call, so the path where nothing fails must not
+	// allocate: no sort of the names, no encoding of plain-string content.
+	questions := map[string]Question{
+		"spam":    Noul{Instructions: "Spam?"},
+		"tone":    Choice{Instructions: "Tone?", Criteria: Labels("calm", "angry")},
+		"urgency": Score{Instructions: "Urgency?", Criteria: Levels("low", "high")},
+		"team":    ChoiceOf[Team]{Criteria: LabelsOf(Billing, Technical)},
+	}
+
+	if allocs := testing.AllocsPerRun(100, func() {
+		if err := validateQuestions(questions); err != nil {
+			t.Fatal(err)
+		}
+	}); allocs != 0 {
+		t.Errorf("validateQuestions() allocated %v times per run, want 0", allocs)
+	}
+}
+
+func TestTypedQuestionsMarshalLikeTheirPlainForms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		question Question
+		want     string
+	}{
+		{
+			"typed choice",
+			ChoiceOf[Team]{Instructions: "Which team?", Criteria: map[Team]any{Billing: "Payments", Technical: nil}},
+			`{"type":"choice","instructions":"Which team?","criteria":{"billing":"Payments","technical":null}}`,
+		},
+		{
+			"typed score",
+			ScoreOf[Urgency]{Instructions: "How urgent?", Criteria: Levels("can wait", "this week", "today")},
+			`{"type":"score","instructions":"How urgent?","criteria":["can wait","this week","today"]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := json.Marshal(tt.question)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("Marshal() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPlainFormsAreAliases(t *testing.T) {
+	t.Parallel()
+
+	// Choice and Score are the string and int instantiations, not distinct
+	// types, so existing code and the typed layer interoperate freely.
+	hasType[ChoiceOf[string]](Choice{})
+	hasType[ScoreOf[int]](Score{})
+	hasType[ChoiceAnswerOf[string]](ChoiceAnswer{})
+	hasType[ScoreAnswerOf[int]](ScoreAnswer{})
+}
+
+func TestLabelsOf(t *testing.T) {
+	t.Parallel()
+
+	got := LabelsOf(Billing, Technical, Billing)
+	want := map[Team]any{Billing: nil, Technical: nil}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LabelsOf() = %v, want %v", got, want)
+	}
+}
+
+func TestQuestionKindOfTypedForms(t *testing.T) {
+	t.Parallel()
+
+	// A slice, not a map: a ChoiceOf holds a map, so it cannot be a map key.
+	tests := []struct {
+		question Question
+		want     string
+	}{
+		{ChoiceOf[Team]{}, kindChoice},
+		{&ChoiceOf[Team]{}, kindChoice},
+		{ScoreOf[Urgency]{}, kindScore},
+		{(*ScoreOf[Urgency])(nil), ""},
+	}
+	for _, tt := range tests {
+		if got := questionKind(tt.question); got != tt.want {
+			t.Errorf("questionKind(%T) = %q, want %q", tt.question, got, tt.want)
+		}
 	}
 }

@@ -295,7 +295,7 @@ func ExampleSystemOneResponse_Raw() {
 
 	resp, err := client.SystemOne(context.Background(), jev.SystemOneRequest{
 		State:     "a support ticket",
-		Questions: map[string]jev.Question{"billing": jev.Noul{}},
+		Questions: map[string]jev.Question{"billing": jev.Noul{Instructions: "Is this about billing?"}},
 	})
 	if err != nil {
 		panic(err)
@@ -306,4 +306,109 @@ func ExampleSystemOneResponse_Raw() {
 		panic(err)
 	}
 	fmt.Println(body["answers"])
+}
+
+// Team is a caller's own label type for a routing question.
+type Team string
+
+const (
+	Billing   Team = "billing"
+	Technical Team = "technical"
+)
+
+// Severity is a caller's own level type: iota numbering lines up with the
+// rubric, where a description's position is its level.
+type Severity int
+
+const (
+	Cosmetic Severity = iota
+	Degraded
+	Blocking
+)
+
+// Ask returns a typed handle per question, so the answers come back as your
+// own types and the compiler checks what you do with them.
+func ExampleAsk() {
+	client, err := jev.New()
+	if err != nil {
+		panic(err)
+	}
+
+	req := jev.SystemOneRequest{State: "Our integration returns 500 on every request."}
+	urgent := jev.Ask(&req, "urgent", jev.Noul{Instructions: "Does this convey urgency?"})
+	team := jev.Ask(&req, "team", jev.ChoiceOf[Team]{
+		Instructions: "Which team should handle this?",
+		Criteria:     map[Team]any{Billing: "Payments, invoices, refunds", Technical: "Bugs, outages, integrations"},
+	})
+	severity := jev.Ask(&req, "severity", jev.ScoreOf[Severity]{
+		Instructions: "How severe is the issue?",
+		Criteria:     jev.Levels("cosmetic", "degraded, with a workaround", "blocking"),
+	})
+
+	resp, err := client.SystemOne(context.Background(), req)
+	if err != nil {
+		panic(err)
+	}
+
+	u, _ := urgent.Answer(resp)
+	t, _ := team.Answer(resp)
+	s, _ := severity.Answer(resp)
+
+	switch {
+	case t.Confidence < 0.5:
+		fmt.Println("route to a human; runner-up was", t.Ranked()[1])
+	case t.Choice == Technical && s.Level() == Blocking && u.Noul > 0.8:
+		fmt.Println("page on-call")
+	default:
+		fmt.Println("queue for", t.Choice)
+	}
+}
+
+// Ranked orders the labels by probability, so the runner-up is one index away.
+func ExampleChoiceAnswerOf_Ranked() {
+	answer := jev.ChoiceAnswerOf[Team]{
+		Choice:        Technical,
+		Confidence:    0.62,
+		Probabilities: map[Team]float64{Billing: 0.38, Technical: 0.62},
+	}
+
+	fmt.Println(answer.Ranked())
+	// Output: [technical billing]
+}
+
+// A score is an expected value, so it can fall between levels. Level rounds it
+// to the one it is nearest, in your own level type.
+func ExampleScoreAnswerOf_Level() {
+	answer := jev.ScoreAnswerOf[Severity]{
+		Score:  1.8,
+		Legend: map[Severity]any{Cosmetic: "cosmetic", Degraded: "degraded", Blocking: "blocking"},
+	}
+
+	fmt.Println(answer.Level() == Blocking, answer.Description())
+	// Output: true blocking
+}
+
+// An answer of a kind this SDK version does not model is kept, not dropped, so
+// a RawQuestion works end to end.
+func ExampleUnknownAnswer() {
+	client, err := jev.New()
+	if err != nil {
+		panic(err)
+	}
+
+	resp, err := client.SystemOne(context.Background(), jev.SystemOneRequest{
+		State:     "a support ticket",
+		Questions: map[string]jev.Question{"future": jev.RawQuestion{"type": "aurora", "instructions": "?"}},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	if unknown, ok := resp.Answers["future"].(jev.UnknownAnswer); ok {
+		var decoded map[string]any
+		if err := json.Unmarshal(unknown.Raw, &decoded); err != nil {
+			panic(err)
+		}
+		fmt.Println(unknown.Type, decoded)
+	}
 }

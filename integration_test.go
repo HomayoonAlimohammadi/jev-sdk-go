@@ -6,9 +6,13 @@
 package jev_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"flag"
 	"math"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -139,4 +143,113 @@ func sum(values map[string]float64) float64 {
 		total += value
 	}
 	return total
+}
+
+var record = flag.Bool("record", false, "capture live response bodies into testdata/live for the unit tests to decode")
+
+// TestIntegrationRecord captures what the live API actually sends, so the unit
+// tests decode real payloads alongside the schema-derived ones. Run it with
+// -record and review the diff: a change there is the API's shape changing.
+func TestIntegrationRecord(t *testing.T) {
+	if !*record {
+		t.Skip("pass -record to capture live fixtures")
+	}
+	client := liveClient(t)
+
+	models, err := client.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	writeFixture(t, "models.json", models.Raw)
+
+	answers, err := client.SystemOne(t.Context(), jev.SystemOneRequest{
+		State: "I was charged twice. Please help.",
+		Questions: map[string]jev.Question{
+			"spam": jev.Noul{Instructions: "Is this message spam?"},
+			"tone": jev.Choice{
+				Instructions: "What is the tone of this message?",
+				Criteria:     jev.Labels("angry", "calm", "excited"),
+			},
+			"urgency": jev.Score{
+				Instructions: "How urgent is this message?",
+				Criteria:     jev.Levels("Can wait", "Needs attention this week", "Needs attention today"),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SystemOne() error = %v", err)
+	}
+	writeFixture(t, "systemone.json", answers.Raw)
+}
+
+func writeFixture(t *testing.T, name string, body []byte) {
+	t.Helper()
+
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, body, "", "  "); err != nil {
+		t.Fatalf("%s is not JSON: %v", name, err)
+	}
+	indented.WriteByte('\n')
+
+	dir := filepath.Join("testdata", "live")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), indented.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("recorded %s", filepath.Join(dir, name))
+}
+
+type liveTeam string
+
+const (
+	liveBilling   liveTeam = "billing"
+	liveTechnical liveTeam = "technical"
+)
+
+type liveUrgency int
+
+const (
+	liveCanWait liveUrgency = iota
+	liveThisWeek
+	liveToday
+)
+
+func TestIntegrationAsk(t *testing.T) {
+	req := jev.SystemOneRequest{State: "I see two charges of $49 on my card. Please refund one."}
+	team := jev.Ask(&req, "team", jev.ChoiceOf[liveTeam]{
+		Instructions: "Which team should handle this?",
+		Criteria:     jev.LabelsOf(liveBilling, liveTechnical),
+	})
+	urgency := jev.Ask(&req, "urgency", jev.ScoreOf[liveUrgency]{
+		Instructions: "How urgent is this?",
+		Criteria:     jev.Levels("can wait", "this week", "today"),
+	})
+
+	resp, err := liveClient(t).SystemOne(t.Context(), req)
+	if err != nil {
+		t.Fatalf("SystemOne() error = %v", err)
+	}
+
+	got, err := team.Answer(resp)
+	if err != nil {
+		t.Fatalf("team.Answer() error = %v", err)
+	}
+	if got.Choice != liveBilling && got.Choice != liveTechnical {
+		t.Errorf("Choice = %q, want one of the offered teams", got.Choice)
+	}
+	// Only membership is asserted: on an exact tie Ranked orders lexically,
+	// which need not match the label the API picked.
+	if ranked := got.Ranked(); len(ranked) != 2 {
+		t.Errorf("Ranked() = %v, want both offered teams", ranked)
+	}
+
+	level, err := urgency.Answer(resp)
+	if err != nil {
+		t.Fatalf("urgency.Answer() error = %v", err)
+	}
+	if l := level.Level(); l < liveCanWait || l > liveToday {
+		t.Errorf("Level() = %d, want one of the rubric's levels", l)
+	}
 }

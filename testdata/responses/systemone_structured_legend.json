@@ -1,0 +1,16 @@
+{
+  "model": "jev-latest",
+  "usage": {"input_tokens": 120, "output_tokens": 12},
+  "answers": {
+    "urgency": {
+      "type": "score",
+      "score": 0.4,
+      "confidence": 0.7,
+      "legend": {
+        "0": {"meaning": "Can wait", "examples": ["newsletter"]},
+        "1": {"meaning": "Needs attention today", "examples": ["charged twice", {"note": null}]}
+      },
+      "probabilities": {"0": 0.6, "1": 0.4}
+    }
+  }
+}
