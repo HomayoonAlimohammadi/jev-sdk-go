@@ -42,7 +42,7 @@ func main() {
 		Questions: map[string]jev.Question{
 			"category": jev.Choice{
 				Instructions: "What is this ticket about?",
-				Criteria:     map[string]any{"billing": nil, "technical": nil, "other": nil},
+				Criteria:     jev.Labels("billing", "technical", "other"),
 			},
 		},
 	})
@@ -63,9 +63,30 @@ func main() {
 | `jev.Score` | rate this against a rubric | an expected score, the rubric, and each level's probability |
 | `jev.RawQuestion` | anything the API accepts | whatever comes back, via `resp.Raw` |
 
-Instructions and criteria take any JSON-marshalable value, not just strings:
+A `Choice`'s criteria maps each label to a description of when it applies.
+For labels that speak for themselves, `jev.Labels` saves writing the nils:
 
 ```go
+jev.Choice{
+	Instructions: "What is this ticket about?",
+	Criteria:     jev.Labels("billing", "technical", "other"),
+}
+```
+
+Write the map out to describe a label. A description sharpens the boundary
+between labels that overlap, and it need not be a string — instructions and
+criteria take any JSON-marshalable value:
+
+```go
+jev.Choice{
+	Instructions: "What is this ticket about?",
+	Criteria: map[string]any{
+		"billing":   "Payments, invoices and refunds, but not delivery complaints",
+		"technical": map[string]any{"meaning": "The product misbehaved", "examples": []string{"500 error"}},
+		"other":     nil,
+	},
+}
+
 jev.Noul{
 	Instructions: "Is this a duplicate charge?",
 	Criteria: &jev.NoulCriteria{

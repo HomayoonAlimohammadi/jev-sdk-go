@@ -13,6 +13,46 @@ import (
 	jev "github.com/HomayoonAlimohammadi/jev-sdk-go"
 )
 
+// Labels builds criteria for choices that speak for themselves, so the common
+// case is not padded out with nil values.
+func ExampleLabels() {
+	question := jev.Choice{
+		Instructions: "What is this ticket about?",
+		Criteria:     jev.Labels("billing", "technical", "other"),
+	}
+
+	encoded, err := json.Marshal(question)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(encoded))
+
+	// Output:
+	// {"type":"choice","instructions":"What is this ticket about?","criteria":{"billing":null,"other":null,"technical":null}}
+}
+
+// A description sharpens the boundary between labels that overlap. Write the
+// map out to mix described and undescribed choices.
+func ExampleLabels_described() {
+	question := jev.Choice{
+		Instructions: "What is this ticket about?",
+		Criteria: map[string]any{
+			"billing":   "Payments, invoices and refunds, but not delivery complaints",
+			"technical": map[string]any{"meaning": "The product misbehaved", "examples": []string{"500 error"}},
+			"other":     nil,
+		},
+	}
+
+	encoded, err := json.Marshal(question)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(encoded))
+
+	// Output:
+	// {"type":"choice","instructions":"What is this ticket about?","criteria":{"billing":"Payments, invoices and refunds, but not delivery complaints","other":null,"technical":{"examples":["500 error"],"meaning":"The product misbehaved"}}}
+}
+
 func ExampleClient_SystemOne() {
 	client, err := jev.New()
 	if err != nil {
@@ -25,7 +65,7 @@ func ExampleClient_SystemOne() {
 			"billing": jev.Noul{Instructions: "Is this ticket about billing?"},
 			"tone": jev.Choice{
 				Instructions: "What is the customer's tone?",
-				Criteria:     map[string]any{"calm": nil, "frustrated": nil, "angry": nil},
+				Criteria:     jev.Labels("calm", "frustrated", "angry"),
 			},
 			"urgency": jev.Score{
 				Instructions: "How urgent is this ticket?",
@@ -111,7 +151,7 @@ func ExampleClient_SystemOneAs() {
 		State: "I was charged twice.",
 		Questions: map[string]jev.Question{
 			"billing": jev.Noul{Instructions: "Is this about billing?"},
-			"tone":    jev.Choice{Criteria: map[string]any{"calm": nil, "angry": nil}},
+			"tone":    jev.Choice{Criteria: jev.Labels("calm", "angry")},
 		},
 	})
 	if err != nil {

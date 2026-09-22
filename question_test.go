@@ -3,6 +3,7 @@ package jev
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -195,5 +196,85 @@ func TestPointerQuestionsMarshal(t *testing.T) {
 		if want := `{"q":` + tt.want + `}`; string(got) != want {
 			t.Errorf("Marshal(%T) = %s, want %s", tt.question, got, want)
 		}
+	}
+}
+
+func TestLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		names []string
+		want  map[string]any
+	}{
+		{"several", []string{"billing", "technical", "other"}, map[string]any{"billing": nil, "technical": nil, "other": nil}},
+		{"one", []string{"spam"}, map[string]any{"spam": nil}},
+		// A repeated label collapses, matching what a map literal would do.
+		{"duplicates collapse", []string{"a", "b", "a"}, map[string]any{"a": nil, "b": nil}},
+		{"none", nil, map[string]any{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := Labels(tt.names...)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Labels(%q) = %v, want %v", tt.names, got, tt.want)
+			}
+			for label, description := range got {
+				if description != nil {
+					t.Errorf("Labels() described %q as %v, want an undescribed label", label, description)
+				}
+			}
+		})
+	}
+}
+
+func TestLabelsMarshalsLikeAMapLiteral(t *testing.T) {
+	t.Parallel()
+
+	helper, err := json.Marshal(Choice{Instructions: "Tone?", Criteria: Labels("calm", "angry")})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	literal, err := json.Marshal(Choice{Instructions: "Tone?", Criteria: map[string]any{"calm": nil, "angry": nil}})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	if string(helper) != string(literal) {
+		t.Errorf("Labels() encoded as %s, want it identical to the map literal %s", helper, literal)
+	}
+	if want := `{"type":"choice","instructions":"Tone?","criteria":{"angry":null,"calm":null}}`; string(helper) != want {
+		t.Errorf("Marshal() = %s, want %s", helper, want)
+	}
+}
+
+func TestLabelsResultIsIndependent(t *testing.T) {
+	t.Parallel()
+
+	// The returned map is the caller's to describe further.
+	criteria := Labels("billing", "other")
+	criteria["billing"] = "Payments or invoices"
+
+	got, err := json.Marshal(Choice{Criteria: criteria})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if want := `{"type":"choice","criteria":{"billing":"Payments or invoices","other":null}}`; string(got) != want {
+		t.Errorf("Marshal() = %s, want %s", got, want)
+	}
+}
+
+func TestLabelsEmptyIsRejected(t *testing.T) {
+	t.Parallel()
+
+	// Labels() with no names is an empty criteria map, which validation
+	// refuses just as it refuses a bare Choice{}.
+	err := validateQuestions(map[string]Question{"q": Choice{Criteria: Labels()}})
+	if !errors.Is(err, ErrInvalidQuestion) {
+		t.Errorf("validateQuestions() error = %v, want ErrInvalidQuestion", err)
 	}
 }

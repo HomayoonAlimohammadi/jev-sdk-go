@@ -38,7 +38,7 @@ func run() error {
 			"billing": jev.Noul{Instructions: "Is this ticket about billing?"},
 			"tone": jev.Choice{
 				Instructions: "What is the customer's tone?",
-				Criteria:     map[string]any{"calm": nil, "frustrated": nil, "angry": nil},
+				Criteria:     jev.Labels("calm", "frustrated", "angry"),
 			},
 			"urgency": jev.Score{
 				Instructions: "How urgent is this ticket?",

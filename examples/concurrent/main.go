@@ -62,7 +62,7 @@ func run() error {
 				Questions: map[string]jev.Question{
 					"billing": jev.Noul{Instructions: "Is this about billing?"},
 					"tone": jev.Choice{
-						Criteria: map[string]any{"positive": nil, "neutral": nil, "negative": nil},
+						Criteria: jev.Labels("positive", "neutral", "negative"),
 					},
 				},
 			})

@@ -75,6 +75,25 @@ func (c Choice) MarshalJSON() ([]byte, error) {
 	}{kindChoice, choice(c)})
 }
 
+// Labels builds [Choice] criteria for choices that need no description, so a
+// call site is not padded out with nil values:
+//
+//	jev.Choice{
+//	    Instructions: "What is this ticket about?",
+//	    Criteria:     jev.Labels("billing", "technical", "other"),
+//	}
+//
+// Describe a choice by writing the map out instead; a description sharpens the
+// boundary between labels and is worth the extra line when they overlap. A
+// label repeated here appears once in the request.
+func Labels(names ...string) map[string]any {
+	criteria := make(map[string]any, len(names))
+	for _, name := range names {
+		criteria[name] = nil
+	}
+	return criteria
+}
+
 // Score is a question that rates the state against an ordered rubric.
 //
 // See https://docs.typesafe.ai/primitives/score.

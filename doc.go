@@ -18,7 +18,7 @@
 //	    Questions: map[string]jev.Question{
 //	        "category": jev.Choice{
 //	            Instructions: "What is this ticket about?",
-//	            Criteria: map[string]any{"billing": nil, "technical": nil, "other": nil},
+//	            Criteria:     jev.Labels("billing", "technical", "other"),
 //	        },
 //	    },
 //	})

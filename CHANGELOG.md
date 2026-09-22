@@ -16,6 +16,7 @@ releases. Nothing under `internal/` carries a compatibility promise.
   context-aware and safe for concurrent use.
 - `Noul`, `Choice`, `Score` and `RawQuestion` question types, with client-side
   validation before a request is sent.
+- `Labels`, which builds `Choice` criteria for labels that need no description.
 - `APIError`, `TransportError` and `ResponseError`, with status-category
   sentinels matched through `errors.Is` and dotted field paths for unusable
   response bodies.
