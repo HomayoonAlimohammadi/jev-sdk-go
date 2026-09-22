@@ -70,8 +70,13 @@ func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest, opts ...Ca
 //
 //	answers, err := client.SystemOneAs[myAnswers](ctx, req)
 //
-// Unlike [Client.SystemOne], missing fields are not reported: encoding/json
-// leaves them at their zero value. Use pointer fields where absence matters.
+// Unlike [Client.SystemOne], nothing about the response is checked. A field the
+// server omitted is left at its zero value, and an answer the server never sent
+// is left at its zero value too, so a NoulAnswer{} is indistinguishable from a
+// confident "no" and a ChoiceAnswer{} from an empty choice. Where that
+// difference could decide anything, use pointer fields so absence is visible,
+// or call [Client.SystemOne], which rejects a response that leaves a question
+// unanswered.
 func (c *Client) SystemOneAs[T any](ctx context.Context, req SystemOneRequest, opts ...CallOption) (*T, error) {
 	meta, err := c.systemOne(ctx, req, opts)
 	if err != nil {

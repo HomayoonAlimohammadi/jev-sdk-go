@@ -18,6 +18,7 @@ type clientConfig struct {
 	httpClient *http.Client
 
 	maxResponseBytes int64
+	logBodies        bool
 }
 
 // ClientOption configures a [Client]. Options are applied in order, and each
@@ -33,8 +34,11 @@ func WithAPIKey(key string) ClientOption {
 	}
 }
 
-// WithBaseURL sets the API root, overriding TYPESAFE_BASE_URL. Trailing
-// slashes are trimmed.
+// WithBaseURL sets the API root, overriding TYPESAFE_BASE_URL. The scheme must
+// be https or http, trailing slashes are trimmed, and a query or fragment is
+// rejected because it would swallow the endpoint path. Credentials in the URL
+// are sent but never logged. A plaintext http host other than loopback is
+// logged as a warning, since it puts the API key on the wire in the clear.
 func WithBaseURL(rawURL string) ClientOption {
 	return func(c *clientConfig) error {
 		c.baseURL = rawURL
@@ -89,9 +93,28 @@ func WithMaxResponseBytes(n int64) ClientOption {
 	}
 }
 
+// WithBodyLogging allows request and response bodies into debug logs.
+//
+// It is off by default and should stay off in production: the request body is
+// the state being evaluated and the response is the model's reading of it, so
+// both carry whatever the caller's content carries. Nothing in a body is
+// redacted, and turning this on makes a service-wide debug log level enough to
+// persist customer content.
+func WithBodyLogging(enabled bool) ClientOption {
+	return func(c *clientConfig) error {
+		c.logBodies = enabled
+		return nil
+	}
+}
+
 // WithHTTPClient supplies the [http.Client] used for every request. Use it for
 // proxies, custom TLS, connection tuning or instrumentation. The client is not
 // modified, and it is the caller's to close.
+//
+// A supplied client follows redirects unless it sets its own CheckRedirect.
+// Set it to return [http.ErrUseLastResponse]: net/http keeps an Authorization
+// header across an https to http redirect to the same host, and keeps every
+// header this SDK does not know about across a redirect to any host.
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(c *clientConfig) error {
 		if client == nil {
@@ -102,9 +125,10 @@ func WithHTTPClient(client *http.Client) ClientOption {
 	}
 }
 
-// WithLogger sends the SDK's logs to l. Credential-bearing headers are
-// redacted, but request and response bodies are logged verbatim at debug
-// level. Without this option the SDK logs nothing.
+// WithLogger sends the SDK's logs to l. URLs are stripped of credentials and
+// credential-bearing headers are redacted. Request and response bodies are
+// left out unless [WithBodyLogging] asks for them. Without this option the SDK
+// logs nothing.
 func WithLogger(l *slog.Logger) ClientOption {
 	return func(c *clientConfig) error {
 		if l == nil {

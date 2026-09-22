@@ -25,6 +25,18 @@ linters:
       - path: (_test\.go|examples/)
         linters: [errcheck, gosec]
 
+      # G404: backoff jitter is not a security primitive. The draw only
+      # shortens an already-computed retry delay and is never transmitted, so
+      # math/rand/v2 is correct and crypto/rand would be a syscall per retry.
+      - path: (retry|client)\.go
+        text: "G404"
+        linters: [gosec]
+
+      # G101: these are environment variable names, not credentials.
+      - path: client\.go
+        text: "G101"
+        linters: [gosec]
+
 formatters:
   enable:
     - gofmt

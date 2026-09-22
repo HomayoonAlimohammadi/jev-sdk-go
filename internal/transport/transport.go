@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -19,9 +20,9 @@ type Request struct {
 	Method string
 	URL    string
 
-	// Endpoint labels the request in logs and errors. It is the method and
-	// URL with any credentials removed.
-	Endpoint string
+	// SafeURL is URL with any credentials, query and fragment removed. It is
+	// the only form that reaches a log line.
+	SafeURL string
 
 	Header http.Header
 
@@ -43,6 +44,10 @@ type Request struct {
 	// memory. One extra byte is read so the caller can tell a body that fits
 	// from one that was cut short. Zero reads the body in full.
 	MaxResponseBytes int64
+
+	// LogBodies allows request and response bodies into debug logs. They are
+	// never redacted, so this stays off unless the caller asks for it.
+	LogBodies bool
 }
 
 // Response is a completed exchange whose body has been read in full.
@@ -125,7 +130,7 @@ func (c *Client) Send(ctx context.Context, req Request, policy Policy) (*Respons
 			break
 		}
 
-		c.Logger.Info("jev: retrying", "method", req.Method, "url", req.URL, "retry", attempt, "delay", delay)
+		c.Logger.Info("jev: retrying", "method", req.Method, "url", req.SafeURL, "retry", attempt, "delay", delay)
 		if err := c.Sleep(ctx, delay); err != nil {
 			return nil, attempt, err
 		}
@@ -171,19 +176,26 @@ func (c *Client) attempt(ctx context.Context, req Request, attempt int) (*Respon
 	started := c.Now()
 	httpResp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		c.Logger.Info("jev: request failed", "method", req.Method, "url", req.URL, "error", err)
+		c.Logger.Info("jev: request failed", "method", req.Method, "url", req.SafeURL, "error", err)
 		return nil, err
 	}
-	defer httpResp.Body.Close()
+	// The body is read in full below, so a close error carries no information.
+	defer func() { _ = httpResp.Body.Close() }()
 
 	reader := io.Reader(httpResp.Body)
-	if req.MaxResponseBytes > 0 {
-		reader = io.LimitReader(reader, req.MaxResponseBytes+1)
+	if limit := req.MaxResponseBytes; limit > 0 {
+		// One byte past the cap makes an overlong body detectable. Guard the
+		// increment: a cap of MaxInt64 would wrap negative, and a negative
+		// limit makes io.LimitReader report EOF on the first read.
+		if limit < math.MaxInt64 {
+			limit++
+		}
+		reader = io.LimitReader(reader, limit)
 	}
 
 	payload, err := io.ReadAll(reader)
 	if err != nil {
-		c.Logger.Info("jev: response body unreadable", "method", req.Method, "url", req.URL, "error", err)
+		c.Logger.Info("jev: response body unreadable", "method", req.Method, "url", req.SafeURL, "error", err)
 		return nil, err
 	}
 

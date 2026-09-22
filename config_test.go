@@ -117,7 +117,7 @@ func TestMissingAPIKey(t *testing.T) {
 func TestInvalidAPIKey(t *testing.T) {
 	const credential = "ts_live_private"
 
-	for _, suffix := range []string{"\n", "\r", "\t", "\x1f", "\x7f", " ", "é", "​", "\x00"} {
+	for _, suffix := range []string{"\n", "\r", "\t", "\x1f", "\x7f", " ", "\u00e9", "\u200b", "\x00"} {
 		t.Run(escapeName(suffix), func(t *testing.T) {
 			clearEnv(t)
 			t.Setenv(APIKeyEnv, "env-key")

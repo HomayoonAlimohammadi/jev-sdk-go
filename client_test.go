@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -973,5 +975,235 @@ func TestSystemOneAsToleratesPartialAnswers(t *testing.T) {
 	}
 	if got.Model != "jev-latest" {
 		t.Errorf("Model = %q", got.Model)
+	}
+}
+
+func TestRedirectsAreNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	var (
+		targetHits   atomic.Int32
+		targetHeader = make(chan http.Header, 4)
+	)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHits.Add(1)
+		targetHeader <- r.Header.Clone()
+		respondJSON(http.StatusOK, `{"models":[]}`)(w, r)
+	}))
+	defer target.Close()
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+modelsPath, http.StatusFound)
+	}, WithHeader("X-Signature", "caller-credential"))
+
+	_, err := client.ListModels(t.Context())
+
+	// The redirect surfaces as the response it is, not as a silent second
+	// request carrying the caller's credentials to another origin.
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ListModels() error = %v, want *APIError", err)
+	}
+	if apiErr.StatusCode != http.StatusFound {
+		t.Errorf("StatusCode = %d, want 302", apiErr.StatusCode)
+	}
+	if got := targetHits.Load(); got != 0 {
+		t.Fatalf("redirect target received %d requests, want 0", got)
+	}
+}
+
+func TestSuppliedHTTPClientKeepsItsRedirectPolicy(t *testing.T) {
+	t.Parallel()
+
+	// The SDK sets CheckRedirect only on a client it owns; a supplied one is
+	// left exactly as the caller configured it.
+	supplied := &http.Client{}
+	client, err := New(WithAPIKey("k"), WithHTTPClient(supplied))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if client.httpClient.CheckRedirect != nil {
+		t.Error("New() overwrote the supplied client's CheckRedirect")
+	}
+
+	owned, err := New(WithAPIKey("k"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if owned.httpClient.CheckRedirect == nil {
+		t.Error("New() left its own client following redirects")
+	}
+}
+
+func TestBaseURLValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+		want    string // normalized form, empty when it must be rejected
+	}{
+		{"https", "https://api.typesafe.ai", "https://api.typesafe.ai"},
+		{"http", "http://localhost:8080", "http://localhost:8080"},
+		{"trailing slashes", "https://api.typesafe.ai///", "https://api.typesafe.ai"},
+		{"with path prefix", "https://gw.test/jev", "https://gw.test/jev"},
+		{"credentials kept", "https://user:pw@gw.test", "https://user:pw@gw.test"},
+
+		{"empty", "", ""},
+		{"no scheme", "api.typesafe.ai", ""},
+		{"not a url", "not a url", ""},
+		{"ftp", "ftp://api.typesafe.ai", ""},
+		{"file", "file:///etc/passwd", ""},
+		// A query or fragment would swallow the endpoint path appended to it.
+		{"fragment", "https://api.typesafe.ai#", ""},
+		{"fragment with value", "https://api.typesafe.ai#frag", ""},
+		{"query", "https://api.typesafe.ai?x=1", ""},
+		{"forced query", "https://api.typesafe.ai?", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := normalizeBaseURL(tt.baseURL)
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("normalizeBaseURL(%q) = %q, want an error", tt.baseURL, got)
+				}
+				if !errors.Is(err, ErrInvalidBaseURL) {
+					t.Errorf("normalizeBaseURL() error = %v, want ErrInvalidBaseURL", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeBaseURL(%q) error = %v", tt.baseURL, err)
+			}
+			if got != tt.want {
+				t.Errorf("normalizeBaseURL(%q) = %q, want %q", tt.baseURL, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBaseURLPathIsNotSwallowed(t *testing.T) {
+	t.Parallel()
+
+	// Guards the reason a fragment is rejected: appending the endpoint path to
+	// such a URL parses the path as a fragment and hits the host root instead.
+	client, rec := newTestClient(t, respondJSON(http.StatusOK, `{"models":[]}`))
+	if _, err := client.ListModels(t.Context()); err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+
+	req, _ := rec.last()
+	if req.URL.Path != modelsPath {
+		t.Errorf("request path = %q, want %q", req.URL.Path, modelsPath)
+	}
+}
+
+func TestInsecureBaseURLWarning(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		want    bool
+	}{
+		{"https is silent", "https://api.typesafe.ai", false},
+		{"loopback ip is exempt", "http://127.0.0.1:8080", false},
+		{"ipv6 loopback is exempt", "http://[::1]:8080", false},
+		{"localhost is exempt", "http://localhost:8080", false},
+		{"plaintext to a remote host warns", "http://api.typesafe.ai", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logged bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+			if _, err := New(WithAPIKey("k"), WithBaseURL(tt.baseURL), WithLogger(logger)); err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			if got := strings.Contains(logged.String(), "plaintext http"); got != tt.want {
+				t.Errorf("warned = %v, want %v (log: %q)", got, tt.want, logged.String())
+			}
+		})
+	}
+}
+
+func TestMaxResponseBytesDoesNotOverflow(t *testing.T) {
+	t.Parallel()
+
+	// A cap of MaxInt64 must not wrap when the transport reads one byte past
+	// it, which would make io.LimitReader report EOF and empty every body.
+	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody), WithMaxResponseBytes(math.MaxInt64))
+
+	resp, err := client.SystemOne(t.Context(), noulRequest())
+	if err != nil {
+		t.Fatalf("SystemOne() error = %v", err)
+	}
+	if len(resp.Raw) != len(systemOneBody) {
+		t.Errorf("Raw is %d bytes, want the whole %d byte body", len(resp.Raw), len(systemOneBody))
+	}
+}
+
+func TestLogsOmitBaseURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	var logged bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	rec := &recorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.record(r)
+		respondJSON(http.StatusTooManyRequests, `{"message":"slow down"}`)(w, r)
+	}))
+	defer server.Close()
+
+	// Credentials in the base URL must reach the wire but never a log line.
+	withCreds := strings.Replace(server.URL, "http://", "http://svc:base-url-credential@", 1)
+	client, err := New(
+		WithAPIKey("api-key-credential"),
+		WithBaseURL(withCreds),
+		WithLogger(logger),
+		WithRetry(RetryPolicy{MaxRetries: 1, RetryStatuses: []int{http.StatusTooManyRequests}}),
+	)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := client.ListModels(t.Context()); err == nil {
+		t.Fatal("ListModels() error = nil, want an API error")
+	}
+
+	output := logged.String()
+	for _, credential := range []string{"base-url-credential", "api-key-credential", "svc:"} {
+		if strings.Contains(output, credential) {
+			t.Errorf("log output leaked %q", credential)
+		}
+	}
+	if !strings.Contains(output, "jev: retrying") {
+		t.Error("log output is missing the retry line, so the URL sites were not exercised")
+	}
+}
+
+func TestErrorsOmitBaseURLCredentials(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(http.StatusBadRequest, `{"message":"nope"}`)(w, r)
+	}))
+	defer server.Close()
+
+	withCreds := strings.Replace(server.URL, "http://", "http://svc:base-url-credential@", 1)
+	client, err := New(WithAPIKey("k"), WithBaseURL(withCreds), WithRetry(RetryPolicy{}))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = client.ListModels(t.Context())
+	if err == nil {
+		t.Fatal("ListModels() error = nil, want an API error")
+	}
+	if strings.Contains(err.Error(), "base-url-credential") {
+		t.Errorf("error leaked the base URL credential: %v", err)
 	}
 }

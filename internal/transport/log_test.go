@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +17,11 @@ func TestIsSecret(t *testing.T) {
 	secret := []string{
 		"Authorization", "authorization", "Proxy-Authorization", "X-API-Key", "api-key",
 		"Cookie", "Set-Cookie", "X-Access-Token", "X-Client-Secret", "x-MiXeD-ToKeN",
+		// Names the SDK has never heard of, which callers really do set.
+		"X-Signature", "X-Hub-Signature-256", "X-Auth", "Authentication",
+		"X-Access-Key", "X-Session-Id", "Ocp-Apim-Subscription-Key", "X-Password",
 	}
-	public := []string{"Accept", "Content-Type", "X-Typesafe-Request-Id", "X-Team", "User-Agent"}
+	public := []string{"Accept", "Content-Type", "X-Typesafe-Request-Id", "X-Team", "User-Agent", "X-Request-Id"}
 
 	for _, name := range secret {
 		if !isSecret(name) {
@@ -70,6 +74,68 @@ func TestLoggingRedactsCredentials(t *testing.T) {
 	}
 	if !strings.Contains(output, "jev: retrying") {
 		t.Error("log output is missing the retry line")
+	}
+}
+
+func TestLoggingOmitsBodiesUnlessAsked(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"answer":"secret-response-body"}`))
+	}))
+	defer server.Close()
+
+	for _, logBodies := range []bool{false, true} {
+		t.Run(fmt.Sprintf("LogBodies=%v", logBodies), func(t *testing.T) {
+			var logged bytes.Buffer
+			client := newClient(newClock())
+			client.Logger = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			req := request(server.URL)
+			req.LogBodies = logBodies
+			req.Body = []byte(`{"state":"secret-request-body"}`)
+
+			if _, _, err := client.Send(t.Context(), req, alwaysRetry(1, 0)); err != nil {
+				t.Fatalf("Send() error = %v", err)
+			}
+
+			output := logged.String()
+			for _, body := range []string{"secret-request-body", "secret-response-body"} {
+				if got := strings.Contains(output, body); got != logBodies {
+					t.Errorf("body %q logged = %v, want %v", body, got, logBodies)
+				}
+			}
+			// The rest of the record is emitted either way.
+			if !strings.Contains(output, "jev: response") {
+				t.Error("log output is missing the response record")
+			}
+		})
+	}
+}
+
+func TestLoggingUsesTheSanitizedURL(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	var logged bytes.Buffer
+	client := newClient(newClock())
+	client.Logger = slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// Every log site must use SafeURL, never the URL that goes on the wire.
+	req := request(server.URL)
+	req.URL = strings.Replace(server.URL, "http://", "http://svc:url-credential@", 1)
+	req.SafeURL = server.URL
+
+	if _, _, err := client.Send(t.Context(), req, alwaysRetry(2, time.Millisecond)); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	if output := logged.String(); strings.Contains(output, "url-credential") {
+		t.Errorf("log output leaked the URL credential: %q", output)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"runtime"
@@ -103,6 +104,7 @@ type Client struct {
 	retry   RetryPolicy
 
 	maxResponseBytes int64
+	logBodies        bool
 
 	httpClient *http.Client
 	transport  *transport.Client
@@ -152,9 +154,11 @@ func New(opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("%w: it must not be negative, got %d", ErrResponseTooLarge, cfg.maxResponseBytes)
 	}
 
+	warnInsecureBaseURL(cfg.logger, baseURL)
+
 	httpClient := cfg.httpClient
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{CheckRedirect: refuseRedirects}
 	}
 
 	return &Client{
@@ -166,6 +170,7 @@ func New(opts ...ClientOption) (*Client, error) {
 		retry:   cfg.retry,
 
 		maxResponseBytes: cfg.maxResponseBytes,
+		logBodies:        cfg.logBodies,
 
 		httpClient: httpClient,
 		transport: &transport.Client{
@@ -208,30 +213,77 @@ func validateAPIKey(raw string) (string, error) {
 }
 
 // normalizeBaseURL trims the URL and strips trailing slashes so a path can be
-// appended directly. Credentials are left in place; they are removed only from
-// the endpoint labels that reach logs and errors.
+// appended directly. Credentials are left in place; they are removed from the
+// sanitized form that reaches logs and errors.
 func normalizeBaseURL(raw string) (string, error) {
 	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
 
 	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed.Host == "" {
 		return "", fmt.Errorf("%w: %q", ErrInvalidBaseURL, raw)
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", fmt.Errorf("%w: scheme must be https or http, got %q", ErrInvalidBaseURL, parsed.Scheme)
+	}
+	// A query or fragment would swallow the endpoint path appended to this
+	// URL, silently sending every request to the host root instead. The raw
+	// string is what matters: a bare trailing "#" parses to an empty Fragment
+	// yet still captures whatever follows it. Either character is legal in a
+	// path only percent-encoded, so finding one here always means a delimiter.
+	if strings.ContainsAny(trimmed, "?#") {
+		return "", fmt.Errorf("%w: it must not carry a query or fragment: %q", ErrInvalidBaseURL, raw)
 	}
 	return trimmed, nil
 }
 
-// endpointLabel describes a request for logs and errors, without credentials,
-// query parameters or fragment.
-func endpointLabel(method, rawURL string) string {
+// warnInsecureBaseURL notes a base URL that would put the API key on the wire
+// in cleartext. Loopback is exempt: it is how tests and local proxies run.
+func warnInsecureBaseURL(logger *slog.Logger, baseURL string) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "http" {
+		return
+	}
+
+	if host, err := netip.ParseAddr(parsed.Hostname()); err == nil && host.IsLoopback() {
+		return
+	}
+	if parsed.Hostname() == "localhost" {
+		return
+	}
+
+	logger.Warn("jev: base URL is plaintext http, so the API key is sent in the clear", "url", safeURL(baseURL))
+}
+
+// safeURL strips credentials, query parameters and fragment, leaving the form
+// that may appear in a log line or an error.
+func safeURL(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return method
+		return ""
 	}
 
 	parsed.User = nil
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
-	return method + " " + parsed.String()
+	return parsed.String()
+}
+
+// endpointLabel describes a request for logs and errors.
+func endpointLabel(method, rawURL string) string {
+	sanitized := safeURL(rawURL)
+	if sanitized == "" {
+		return method
+	}
+	return method + " " + sanitized
+}
+
+// refuseRedirects stops the client from following a redirect. An API client has
+// no use for one, and following it risks handing the caller's Authorization or
+// custom credential headers to another origin: net/http strips only six known
+// header names on a cross-origin hop, and its same-origin test compares hosts
+// without comparing schemes, so an https to http redirect keeps them all.
+func refuseRedirects(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 // buildHeader layers call headers over client headers, then stamps the
@@ -281,13 +333,14 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, call 
 	req := transport.Request{
 		Method:           method,
 		URL:              requestURL,
-		Endpoint:         endpoint,
+		SafeURL:          safeURL(requestURL),
 		Header:           c.buildHeader(call, body != nil),
 		Body:             body,
 		Timeout:          timeout,
 		RetryCountHeader: retryCountHeader,
 		RequestIDHeader:  requestIDHeader,
 		MaxResponseBytes: c.maxResponseBytes,
+		LogBodies:        c.logBodies,
 	}
 
 	resp, attempts, err := c.transport.Send(ctx, req, c.policy(policy, endpoint))

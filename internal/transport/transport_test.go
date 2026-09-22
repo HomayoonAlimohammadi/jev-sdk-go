@@ -72,11 +72,12 @@ func request(url string) Request {
 	return Request{
 		Method:           http.MethodPost,
 		URL:              url,
-		Endpoint:         "POST " + url,
+		SafeURL:          url,
 		Header:           http.Header{"X-Test": []string{"1"}},
 		Body:             []byte(`{"state":"hi"}`),
 		RetryCountHeader: "X-Retry-Count",
 		RequestIDHeader:  "X-Request-Id",
+		LogBodies:        true,
 	}
 }
 

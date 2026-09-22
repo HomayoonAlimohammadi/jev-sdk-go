@@ -186,6 +186,7 @@ whitespace-only environment value is ignored.
 | `WithHeader` | — | none |
 | `WithHTTPClient` | — | `&http.Client{}` |
 | `WithMaxResponseBytes` | — | 1 MiB |
+| `WithBodyLogging` | — | off |
 | `WithLogger` | — | logs nothing |
 
 Requests are checked before they leave: `State` must encode to a string,
@@ -233,13 +234,27 @@ wg.Wait()
 
 ## Logging
 
-The SDK logs nothing until you give it a `*slog.Logger`. Credential-bearing
-headers are redacted; request and response bodies are logged verbatim at debug
-level.
+The SDK logs nothing until you give it a `*slog.Logger`. URLs are stripped of
+credentials and credential-bearing headers are redacted.
 
 ```go
 client, err := jev.New(jev.WithLogger(slog.Default()))
 ```
+
+Bodies are left out by default. The request body is the state you are
+evaluating and the response is the model's reading of it, so both carry
+whatever your content carries, and nothing in them is redacted. Opt in only
+where that is acceptable:
+
+```go
+client, err := jev.New(jev.WithLogger(logger), jev.WithBodyLogging(true))
+```
+
+The SDK's own HTTP client refuses to follow redirects. If you supply one with
+`WithHTTPClient`, set `CheckRedirect` to return `http.ErrUseLastResponse`:
+`net/http` keeps an `Authorization` header across an https-to-http redirect to
+the same host, and keeps every header it does not recognize across a redirect
+to any host.
 
 ## Development
 

@@ -124,7 +124,7 @@ func TestAPIErrorIs(t *testing.T) {
 
 			err := error(&APIError{StatusCode: tt.status})
 			for _, sentinel := range sentinels {
-				want := sentinel == tt.want
+				want := errors.Is(sentinel, tt.want)
 				if got := errors.Is(err, sentinel); got != want {
 					t.Errorf("errors.Is(%d, %v) = %v, want %v", tt.status, sentinel, got, want)
 				}

@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// secretHeaders are redacted from log output by exact name. Any header whose
-// name contains "token" or "secret" is redacted too.
+// secretHeaders are redacted from log output by exact name.
 var secretHeaders = map[string]bool{
 	"authorization":       true,
 	"proxy-authorization": true,
@@ -17,6 +16,13 @@ var secretHeaders = map[string]bool{
 	"api-key":             true,
 	"cookie":              true,
 	"set-cookie":          true,
+}
+
+// secretFragments redact by substring, so a header this SDK has never heard of
+// is still covered. Callers set their own headers, and a denylist of exact
+// names would miss X-Signature, Ocp-Apim-Subscription-Key and their kin.
+var secretFragments = []string{
+	"token", "secret", "key", "auth", "credential", "signature", "session", "password", "passwd", "pwd",
 }
 
 const redacted = "***"
@@ -42,19 +48,30 @@ func (h loggableHeader) LogValue() slog.Value {
 
 func isSecret(name string) bool {
 	lowered := strings.ToLower(name)
-	return secretHeaders[lowered] || strings.Contains(lowered, "token") || strings.Contains(lowered, "secret")
+	if secretHeaders[lowered] {
+		return true
+	}
+	for _, fragment := range secretFragments {
+		if strings.Contains(lowered, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) logRequest(ctx context.Context, req Request, header http.Header) {
 	if !c.Logger.Enabled(ctx, slog.LevelDebug) {
 		return
 	}
-	c.Logger.Debug("jev: request",
+	attrs := []any{
 		"method", req.Method,
-		"url", req.URL,
+		"url", req.SafeURL,
 		"headers", loggableHeader(header),
-		"body", string(req.Body),
-	)
+	}
+	if req.LogBodies {
+		attrs = append(attrs, "body", string(req.Body))
+	}
+	c.Logger.Debug("jev: request", attrs...)
 }
 
 func (c *Client) logResponse(ctx context.Context, req Request, resp *http.Response, body []byte, elapsed time.Duration) {
@@ -65,18 +82,23 @@ func (c *Client) logResponse(ctx context.Context, req Request, resp *http.Respon
 
 	c.Logger.Info("jev: response",
 		"method", req.Method,
-		"url", req.URL,
+		"url", req.SafeURL,
 		"status", resp.StatusCode,
 		"duration", elapsed,
 		"request_id", requestID,
 	)
 
-	if c.Logger.Enabled(ctx, slog.LevelDebug) {
-		c.Logger.Debug("jev: response body",
-			"method", req.Method,
-			"url", req.URL,
-			"headers", loggableHeader(resp.Header),
-			"body", string(body),
-		)
+	if !c.Logger.Enabled(ctx, slog.LevelDebug) {
+		return
 	}
+
+	attrs := []any{
+		"method", req.Method,
+		"url", req.SafeURL,
+		"headers", loggableHeader(resp.Header),
+	}
+	if req.LogBodies {
+		attrs = append(attrs, "body", string(body))
+	}
+	c.Logger.Debug("jev: response", attrs...)
 }

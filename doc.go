@@ -60,5 +60,13 @@
 // Retry-After, within a 30 second budget. See [RetryPolicy] to change or
 // disable that, per client or per call.
 //
+// # Logging
+//
+// The SDK logs nothing until [WithLogger] supplies a logger. URLs are stripped
+// of credentials and credential-bearing headers are redacted. Request and
+// response bodies are left out unless [WithBodyLogging] asks for them: the
+// request body is the state being evaluated, so it carries whatever the
+// caller's content carries.
+//
 // Learn what TypeSafe is and what it can do at https://docs.typesafe.ai.
 package jev
