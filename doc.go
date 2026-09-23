@@ -87,6 +87,21 @@
 // request body is the state being evaluated, so it carries whatever the
 // caller's content carries.
 //
+// # Gateways and providers
+//
+// The client talks to anything that serves the System One API. For
+// OpenRouter, set the base URL to https://openrouter.ai/api and use an
+// OpenRouter key:
+//
+//	client, err := jev.New(
+//	    jev.WithBaseURL("https://openrouter.ai/api"),
+//	    jev.WithAPIKey(os.Getenv("OPENROUTER_API_KEY")),
+//	)
+//
+// ListModels does not work through OpenRouter, whose model catalog has a shape
+// of its own. For a gateway of your own, point [WithBaseURL] at it and add its
+// headers with [WithHeader].
+//
 // # Observability
 //
 // There is no tracing dependency. Wrap the transport of the [http.Client]

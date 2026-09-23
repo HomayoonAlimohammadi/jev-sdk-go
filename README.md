@@ -241,7 +241,7 @@ whitespace-only environment value is ignored.
 | `WithTimeout` | — | `10s` per attempt |
 | `WithRetry` | — | `DefaultRetryPolicy()` |
 | `WithHeader` | — | none |
-| `WithHTTPClient` | — | `&http.Client{}` |
+| `WithHTTPClient` | — | a pooled client of its own |
 | `WithMaxResponseBytes` | — | 1 MiB |
 | `WithBodyLogging` | — | off |
 | `WithLogger` | — | logs nothing |
@@ -291,7 +291,8 @@ attempts were made.
 
 ## Concurrency
 
-A `*jev.Client` is safe for concurrent use and pools connections. Create one,
+A `*jev.Client` is safe for concurrent use and keeps a pool of connections of
+its own, sized so concurrent calls reuse them instead of redialing. Create one,
 share it, and choose the parallelism yourself:
 
 ```go
@@ -306,6 +307,11 @@ for _, ticket := range tickets {
 }
 wg.Wait()
 ```
+
+If you supply your own client with `WithHTTPClient`, its transport is used as
+is. Raise `MaxIdleConnsPerHost` on it for concurrent use: net/http's default
+keeps two idle connections per host, so a third call in flight closes and
+redials a connection every time.
 
 ## Logging
 
@@ -322,7 +328,7 @@ whatever your content carries, and nothing in them is redacted. Opt in only
 where that is acceptable:
 
 ```go
-client, err := jev.New(jev.WithLogger(logger), jev.WithBodyLogging(true))
+client, err := jev.New(jev.WithLogger(logger), jev.WithBodyLogging())
 ```
 
 The SDK's own HTTP client refuses to follow redirects. If you supply one with
@@ -349,6 +355,77 @@ client, err := jev.New(jev.WithHTTPClient(httpClient))
 
 Every response, and every `*APIError` and `*ResponseError`, carries the
 `x-typesafe-request-id` as `RequestID`; quote it in a support ticket.
+
+## Gateways and providers
+
+The SDK works with anything that serves the System One API: TypeSafe itself
+(the default), OpenRouter, or a gateway of your own. Pointing it elsewhere is
+configuration, not code.
+
+### OpenRouter
+
+OpenRouter serves the System One API at its own base URL, authenticated with
+an OpenRouter key sent as the bearer token
+([OpenRouter's guide](https://openrouter.ai/docs/guides/community/typesafe-sdk)):
+
+```go
+client, err := jev.New(
+	jev.WithBaseURL("https://openrouter.ai/api"),
+	jev.WithAPIKey(os.Getenv("OPENROUTER_API_KEY")),
+)
+```
+
+Setting `TYPESAFE_BASE_URL=https://openrouter.ai/api` and `TYPESAFE_API_KEY`
+to the OpenRouter key does the same without code.
+
+- The default model, `jev-latest`, works as-is: OpenRouter maps it onto
+  `~typesafe/jev-latest`.
+- OpenRouter adds `id`, `provider` and `usage.cost` to each response. They do
+  no harm, and `resp.Raw` has them.
+- `ListModels` does not work there. OpenRouter's `/v1/models` is its own
+  catalog, so the call fails with a `*jev.ResponseError`.
+- OpenRouter's separate Decisions API (`/api/alpha/decisions`) uses a
+  different request format and is not supported.
+
+### Your own gateway
+
+Any gateway or proxy that forwards the System One request format works. Point
+`WithBaseURL` at it (a path prefix is fine), add the headers it needs with
+`WithHeader` or per call with `WithCallHeader`, and pass a tuned
+`*http.Client` with `WithHTTPClient` if it needs a proxy or custom TLS. A
+gateway that rewrites the request into another format is not supported.
+
+## Examples
+
+[`examples/`](examples) holds a runnable program per use case, each tested
+against an in-process fake of the API:
+
+| Use case | Example |
+|---|---|
+| First call | [`basic`](examples/basic) |
+| Routing with your own enums | [`triage`](examples/triage) |
+| Content moderation | [`moderation`](examples/moderation) |
+| Search relevance | [`rerank`](examples/rerank) |
+| High volume | [`batch`](examples/batch) |
+| Questions from configuration | [`config`](examples/config) |
+| Decoding into your own struct | [`decode`](examples/decode) |
+| Retries and error handling | [`resilience`](examples/resilience) |
+| Logging and metrics | [`observability`](examples/observability) |
+| OpenRouter | [`openrouter`](examples/openrouter) |
+| A gateway of your own | [`gateway`](examples/gateway) |
+
+## For coding agents
+
+An installable skill teaches coding agents to use this SDK the way it is meant
+to be used:
+
+```sh
+npx skills add HomayoonAlimohammadi/jev-sdk-go --skill jev-sdk-go
+```
+
+It is [`skills/jev-sdk-go/SKILL.md`](skills/jev-sdk-go/SKILL.md). For
+designing the questions themselves, TypeSafe publishes its own skill:
+`npx skills add typesafe-ai/skills --skill typesafe-ai`.
 
 ## Performance
 

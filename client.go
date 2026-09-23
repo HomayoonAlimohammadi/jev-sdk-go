@@ -168,7 +168,7 @@ func New(opts ...ClientOption) (*Client, error) {
 
 	httpClient := cfg.httpClient
 	if httpClient == nil {
-		httpClient = &http.Client{CheckRedirect: refuseRedirects}
+		httpClient = newHTTPClient()
 	}
 
 	return &Client{
@@ -198,7 +198,8 @@ func New(opts ...ClientOption) (*Client, error) {
 
 // CloseIdleConnections releases connections the client is holding open but not
 // using. Calling it is optional: a client needs no teardown, and dropping one
-// leaks nothing.
+// leaks nothing. Unless the client came from [WithHTTPClient], the connections
+// are its own, and no other code in the process loses any.
 func (c *Client) CloseIdleConnections() {
 	c.httpClient.CloseIdleConnections()
 }
@@ -285,6 +286,38 @@ func safeURL(rawURL string) string {
 // endpoint describes a request for logs and errors, without credentials.
 func (c *Client) endpoint(method, path string) string {
 	return method + " " + c.safeBaseURL + path
+}
+
+// maxIdleConnsPerHost sizes the pool of kept-alive connections. A client talks
+// to a single host, so the per-host limit is the one that binds, and net/http's
+// default of two would close and redial every connection beyond the second
+// whenever calls run concurrently. It matches net/http's default total, so the
+// one host may use the whole pool.
+const maxIdleConnsPerHost = 100
+
+// newHTTPClient builds the client used when the caller supplies none: a
+// connection pool of its own, sized for one busy host, that follows no
+// redirects.
+func newHTTPClient() *http.Client {
+	return &http.Client{Transport: newTransport(), CheckRedirect: refuseRedirects}
+}
+
+// newTransport clones the process's default transport, keeping its proxy,
+// timeout and HTTP/2 settings, into a pool owned by this client alone. Sharing
+// DefaultTransport would cap the pool at two connections per host, and let
+// CloseIdleConnections close connections other code in the process relies on.
+//
+// A DefaultTransport replaced by something else, typically instrumentation
+// wrapping it, cannot be cloned; it is used as is rather than bypassed.
+func newTransport() http.RoundTripper {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+
+	transport := base.Clone()
+	transport.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	return transport
 }
 
 // refuseRedirects stops the client from following a redirect. An API client has

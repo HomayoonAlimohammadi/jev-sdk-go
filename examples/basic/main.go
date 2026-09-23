@@ -1,12 +1,14 @@
-// Command basic asks a few questions about one support ticket.
+// Command basic is the quickstart: it lists the models available to the
+// account, then asks one of each kind of question about a support ticket and
+// reads the answers back.
 //
-// Set TYPESAFE_API_KEY, then: go run ./examples/basic
+//	TYPESAFE_API_KEY=... go run ./examples/basic
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -15,25 +17,33 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(context.Background(), os.Stdout); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() error {
-	client, err := jev.New()
+// run takes extra client options last, so they override the defaults; the
+// example's test uses them to point it at a fake API.
+func run(ctx context.Context, out io.Writer, opts ...jev.ClientOption) error {
+	client, err := jev.New(opts...) // reads TYPESAFE_API_KEY
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return err
+	}
+	for _, model := range models.Models {
+		fmt.Fprintf(out, "model %s, released %s\n", model.Name, model.ReleaseDate)
+	}
+
+	// Independent questions about the same state belong in one call.
 	resp, err := client.SystemOne(ctx, jev.SystemOneRequest{
-		State: map[string]any{
-			"subject": "Charged twice this month",
-			"body":    "I see two charges of $49. I only have one account. Please fix this ASAP.",
-		},
+		State: "I was charged twice this month. Please refund one of the charges.",
 		Questions: map[string]jev.Question{
 			"billing": jev.Noul{Instructions: "Is this ticket about billing?"},
 			"tone": jev.Choice{
@@ -47,16 +57,17 @@ func run() error {
 		},
 	})
 	if err != nil {
-		var apiErr *jev.APIError
-		if errors.As(err, &apiErr) {
-			fmt.Fprintf(os.Stderr, "request %s failed\n", apiErr.RequestID)
-		}
 		return err
 	}
 
-	fmt.Printf("model:   %s\n", resp.Model)
-	fmt.Printf("billing: %.2f\n", resp.Nouls["billing"].Noul)
-	fmt.Printf("tone:    %s (%.2f)\n", resp.Choices["tone"].Choice, resp.Choices["tone"].Confidence)
-	fmt.Printf("urgency: %.2f of %d\n", resp.Scores["urgency"].Score, len(resp.Scores["urgency"].Legend)-1)
+	// Every question asked is guaranteed an answer of its kind, so these
+	// lookups never read a zero value in place of a missing answer.
+	tone := resp.Choices["tone"]
+	urgency := resp.Scores["urgency"]
+
+	fmt.Fprintf(out, "answered by %s (request %s)\n", resp.Model, resp.RequestID)
+	fmt.Fprintf(out, "billing: %.2f probability of yes\n", resp.Nouls["billing"].Noul)
+	fmt.Fprintf(out, "tone:    %s, confidence %.2f, runner-up %s\n", tone.Choice, tone.Confidence, tone.Ranked()[1])
+	fmt.Fprintf(out, "urgency: %.2f on a 0-2 scale, nearest level %q\n", urgency.Score, urgency.Description())
 	return nil
 }

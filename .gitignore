@@ -1,3 +1,10 @@
 coverage.out
 coverage.html
 /dist/
+
+# Share the maintainer skills even where a global ignore file excludes
+# .claude/. Only skills/ is re-included: local settings stay out. Git cannot
+# re-include a path inside an excluded directory, hence the three steps.
+!.claude/
+.claude/*
+!.claude/skills/

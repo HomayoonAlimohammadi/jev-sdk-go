@@ -34,7 +34,8 @@ func WithAPIKey(key string) ClientOption {
 	}
 }
 
-// WithBaseURL sets the API root, overriding TYPESAFE_BASE_URL. The scheme must
+// WithBaseURL sets the API root, overriding TYPESAFE_BASE_URL: point it at a
+// gateway, or at https://openrouter.ai/api with an OpenRouter key. The scheme must
 // be https or http, trailing slashes are trimmed, and a query or fragment is
 // rejected because it would swallow the endpoint path. Credentials in the URL
 // are sent but never logged. A plaintext http host other than loopback is
@@ -101,9 +102,9 @@ func WithMaxResponseBytes(n int64) ClientOption {
 // both carry whatever the caller's content carries. Nothing in a body is
 // redacted, and turning this on makes a service-wide debug log level enough to
 // persist customer content.
-func WithBodyLogging(enabled bool) ClientOption {
+func WithBodyLogging() ClientOption {
 	return func(c *clientConfig) error {
-		c.logBodies = enabled
+		c.logBodies = true
 		return nil
 	}
 }
@@ -111,6 +112,11 @@ func WithBodyLogging(enabled bool) ClientOption {
 // WithHTTPClient supplies the [http.Client] used for every request. Use it for
 // proxies, custom TLS, connection tuning or instrumentation. The client is not
 // modified, and it is the caller's to close.
+//
+// Its transport is used as is, pool size included. For concurrent use, raise
+// MaxIdleConnsPerHost: net/http's default keeps two idle connections per host,
+// so every call beyond the second in flight redials. The SDK's own client, used
+// when this option is absent, is sized for that already.
 //
 // A supplied client follows redirects unless it sets its own CheckRedirect.
 // Set it to return [http.ErrUseLastResponse]: net/http keeps an Authorization
