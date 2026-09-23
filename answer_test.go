@@ -123,11 +123,6 @@ func TestDecodeAnswerMaskedFieldError(t *testing.T) {
 		want string
 	}{
 		{
-			"choice probability masked by a score field",
-			`{"model":"m","usage":{},"answers":{"c":{"type":"choice","score":"x","choice":"a","confidence":0.5,"probabilities":{"a":"bad"}}}}`,
-			"answers.c.probabilities.a",
-		},
-		{
 			"noul value masked by a legend field",
 			`{"model":"m","usage":{},"answers":{"n":{"type":"noul","legend":[],"noul":"0.5"}}}`,
 			"answers.n.noul",
@@ -167,7 +162,6 @@ func TestDecodeAnswerMalformed(t *testing.T) {
 		// A mistyped value is stored as a zero by encoding/json, so these must be
 		// caught from the recorded error, not from a nil pointer.
 		{"mistyped noul", `{"model":"m","usage":{},"answers":{"n":{"type":"noul","noul":"0.5"}}}`, "answers.n.noul"},
-		{"mistyped probability", `{"model":"m","usage":{},"answers":{"c":{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":"x"}}}}`, "answers.c.probabilities.a"},
 		{"empty type", `{"model":"m","usage":{},"answers":{"c":{"type":""}}}`, "answers.c.type"},
 		{"null type", `{"model":"m","usage":{},"answers":{"c":{"type":null}}}`, "answers.c.type"},
 		{"object type", `{"model":"m","usage":{},"answers":{"c":{"type":{}}}}`, "answers.c.type"},
@@ -213,5 +207,48 @@ func TestUnknownAnswerKeepsOnlyWhatItNeeds(t *testing.T) {
 	// An unknown answer belongs to no typed view.
 	if len(got.Nouls) != 1 || len(got.Choices) != 0 || len(got.Scores) != 0 {
 		t.Errorf("typed views = %d/%d/%d, want 1/0/0", len(got.Nouls), len(got.Choices), len(got.Scores))
+	}
+}
+
+func TestMistypedMapValueIsReported(t *testing.T) {
+	t.Parallel()
+
+	// A map value of the wrong type is caught on every supported Go release,
+	// but the path it is reported at depends on the release: from 1.27,
+	// encoding/json names the key ("probabilities.a"); before, it stops at the
+	// map ("probabilities"). Either is correct, and the answer is rejected
+	// rather than decoded with a zero in place of the bad value.
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			"on its own",
+			`{"model":"m","usage":{},"answers":{"c":{"type":"choice","choice":"a","confidence":1,"probabilities":{"a":"x"}}}}`,
+		},
+		{
+			// An irrelevant mistyped field comes first, so the relevant one is
+			// found only by re-reading the answer field by field.
+			"masked by a field the kind ignores",
+			`{"model":"m","usage":{},"answers":{"c":{"type":"choice","score":"x","choice":"a","confidence":0.5,"probabilities":{"a":"bad"}}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := decodeSystemOne(meta(tt.body), nil, "")
+
+			var responseErr *ResponseError
+			if !errors.As(err, &responseErr) {
+				t.Fatalf("decodeSystemOne() error = %v, want *ResponseError", err)
+			}
+			switch responseErr.Field {
+			case "answers.c.probabilities.a", "answers.c.probabilities":
+			default:
+				t.Errorf("Field = %q, want answers.c.probabilities, keyed by a or not", responseErr.Field)
+			}
+		})
 	}
 }

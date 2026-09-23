@@ -18,7 +18,7 @@ Do not use it to generate text; it answers questions, it does not write prose.
 go get github.com/HomayoonAlimohammadi/jev-sdk-go
 ```
 
-Requires Go 1.27. No other dependencies. The API key comes from
+Requires Go 1.24 or later. No other dependencies. The API key comes from
 `TYPESAFE_API_KEY` or `jev.WithAPIKey`. Read it from server-side configuration;
 never embed it in source, a URL, a log line, or anything shipped to a browser.
 
@@ -187,9 +187,9 @@ type evaluator interface {
 }
 ```
 
-`SystemOneAs[T]` is a generic method, so it cannot appear in an interface; use
-`SystemOne` behind the seam. For tests that exercise the SDK itself, point
-`jev.WithBaseURL` at an `httptest.Server`.
+`jev.SystemOneAs[T]` is a generic function taking the client, so it cannot sit
+behind that interface; use `SystemOne` behind the seam. For tests that exercise
+the SDK itself, point `jev.WithBaseURL` at an `httptest.Server`.
 
 ## Checklist
 

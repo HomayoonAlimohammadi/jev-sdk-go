@@ -68,7 +68,10 @@ func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest, opts ...Ca
 //	    } `json:"answers"`
 //	}
 //
-//	answers, err := client.SystemOneAs[myAnswers](ctx, req)
+//	answers, err := jev.SystemOneAs[myAnswers](ctx, client, req)
+//
+// It is a function rather than a method so the SDK builds on Go releases
+// before 1.27, which cannot declare a generic method.
 //
 // Unlike [Client.SystemOne], nothing about the response is checked. A field the
 // server omitted is left at its zero value, and an answer the server never sent
@@ -77,7 +80,7 @@ func (c *Client) SystemOne(ctx context.Context, req SystemOneRequest, opts ...Ca
 // difference could decide anything, use pointer fields so absence is visible,
 // or call [Client.SystemOne], which rejects a response that leaves a question
 // unanswered.
-func (c *Client) SystemOneAs[T any](ctx context.Context, req SystemOneRequest, opts ...CallOption) (*T, error) {
+func SystemOneAs[T any](ctx context.Context, c *Client, req SystemOneRequest, opts ...CallOption) (*T, error) {
 	meta, err := c.systemOne(ctx, req, opts)
 	if err != nil {
 		return nil, err

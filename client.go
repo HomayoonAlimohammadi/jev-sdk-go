@@ -161,7 +161,7 @@ func New(opts ...ClientOption) (*Client, error) {
 		return nil, err
 	}
 	if cfg.maxResponseBytes < 0 {
-		return nil, fmt.Errorf("%w: it must not be negative, got %d", ErrResponseTooLarge, cfg.maxResponseBytes)
+		return nil, fmt.Errorf("%w: WithMaxResponseBytes must not be negative, got %d", ErrInvalidOption, cfg.maxResponseBytes)
 	}
 
 	warnInsecureBaseURL(cfg.logger, baseURL)

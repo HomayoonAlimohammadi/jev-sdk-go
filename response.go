@@ -17,7 +17,7 @@ var (
 
 // ResponseMeta is the HTTP metadata attached to every response.
 //
-// Embedding it in a type passed to [Client.SystemOneAs] opts that type in:
+// Embedding it in a type passed to [SystemOneAs] opts that type in:
 // the SDK fills it after decoding the body.
 type ResponseMeta struct {
 	// RequestID is the x-typesafe-request-id response header, if the server

@@ -14,7 +14,7 @@ Zero dependencies — standard library only.
 go get github.com/HomayoonAlimohammadi/jev-sdk-go
 ```
 
-Requires Go 1.27.
+Requires Go 1.24 or later.
 
 ## Quickstart
 
@@ -192,7 +192,7 @@ type ticket struct {
 	} `json:"answers"`
 }
 
-answers, err := client.SystemOneAs[ticket](ctx, req)
+answers, err := jev.SystemOneAs[ticket](ctx, client, req)
 ```
 
 The generic answer types carry JSON tags, so `ChoiceAnswerOf[Team]` and

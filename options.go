@@ -85,7 +85,8 @@ func WithHeader(name, value string) ClientOption {
 
 // WithMaxResponseBytes caps how much of a response body is read into memory,
 // guarding against a runaway or hostile server. A body over the cap fails with
-// a [*ResponseError] wrapping [ErrResponseTooLarge]. Zero removes the cap.
+// a [*ResponseError] wrapping [ErrResponseTooLarge]. Zero removes the cap; a
+// negative value is refused with [ErrInvalidOption].
 func WithMaxResponseBytes(n int64) ClientOption {
 	return func(c *clientConfig) error {
 		c.maxResponseBytes = n
@@ -118,7 +119,7 @@ func WithBodyLogging(enabled bool) ClientOption {
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(c *clientConfig) error {
 		if client == nil {
-			return fmt.Errorf("jev: WithHTTPClient was given a nil client")
+			return fmt.Errorf("%w: WithHTTPClient was given a nil client", ErrInvalidOption)
 		}
 		c.httpClient = client
 		return nil
@@ -132,7 +133,7 @@ func WithHTTPClient(client *http.Client) ClientOption {
 func WithLogger(l *slog.Logger) ClientOption {
 	return func(c *clientConfig) error {
 		if l == nil {
-			return fmt.Errorf("jev: WithLogger was given a nil logger")
+			return fmt.Errorf("%w: WithLogger was given a nil logger", ErrInvalidOption)
 		}
 		c.logger = l
 		return nil

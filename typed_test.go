@@ -233,7 +233,7 @@ func TestSystemOneAsDecodesTypedLabels(t *testing.T) {
 	req := SystemOneRequest{State: "Our integration returns 500 on every request."}
 	Ask(&req, "team", ChoiceOf[Team]{Criteria: LabelsOf(Billing, Technical)})
 
-	got, err := client.SystemOneAs[ticket](t.Context(), req)
+	got, err := SystemOneAs[ticket](t.Context(), client, req)
 	if err != nil {
 		t.Fatalf("SystemOneAs() error = %v", err)
 	}

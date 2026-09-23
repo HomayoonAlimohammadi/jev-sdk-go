@@ -23,6 +23,7 @@ var (
 	ErrInvalidTimeout  = errors.New("jev: invalid timeout")
 	ErrInvalidRetry    = errors.New("jev: invalid retry policy")
 	ErrInvalidBaseURL  = errors.New("jev: invalid base URL")
+	ErrInvalidOption   = errors.New("jev: invalid option")
 	ErrInvalidState    = errors.New("jev: invalid state")
 	ErrNoQuestions     = errors.New("jev: at least one question is required")
 	ErrInvalidQuestion = errors.New("jev: invalid question")

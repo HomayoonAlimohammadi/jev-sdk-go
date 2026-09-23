@@ -110,7 +110,7 @@ func TestIntegrationSystemOneAs(t *testing.T) {
 		} `json:"answers"`
 	}
 
-	got, err := liveClient(t).SystemOneAs[answers](t.Context(), jev.SystemOneRequest{
+	got, err := jev.SystemOneAs[answers](t.Context(), liveClient(t), jev.SystemOneRequest{
 		State:     "I see two charges of $49. Please fix this.",
 		Questions: map[string]jev.Question{"billing": jev.Noul{Instructions: "Is this about billing?"}},
 	})

@@ -150,7 +150,7 @@ func ExampleRawQuestion() {
 
 // SystemOneAs decodes the response body into a type of your own. The body is
 // decoded as the API sends it, so the struct mirrors the wire shape.
-func ExampleClient_SystemOneAs() {
+func ExampleSystemOneAs() {
 	type ticketAnswers struct {
 		jev.ResponseMeta // optional: filled in with the request ID and headers
 
@@ -165,7 +165,7 @@ func ExampleClient_SystemOneAs() {
 		panic(err)
 	}
 
-	answers, err := client.SystemOneAs[ticketAnswers](context.Background(), jev.SystemOneRequest{
+	answers, err := jev.SystemOneAs[ticketAnswers](context.Background(), client, jev.SystemOneRequest{
 		State: "I was charged twice.",
 		Questions: map[string]jev.Question{
 			"billing": jev.Noul{Instructions: "Is this about billing?"},

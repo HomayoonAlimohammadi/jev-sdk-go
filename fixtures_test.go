@@ -191,11 +191,44 @@ func TestRequestGolden(t *testing.T) {
 		return
 	}
 
-	want, err := os.ReadFile(golden)
+	matches, want, err := matchesGolden(indented.Bytes(), golden)
 	if err != nil {
 		t.Fatalf("%v (run with -update to create it)", err)
 	}
-	if !bytes.Equal(indented.Bytes(), want) {
+	if !matches {
 		t.Errorf("request encoding changed; run with -update if intended.\ngot:\n%s\nwant:\n%s", indented.Bytes(), want)
+	}
+}
+
+// matchesGolden reports whether got equals the golden file at path, returning
+// the file's contents for the failure message. Line endings are normalized
+// first: a Windows checkout may have rewritten the file's LF as CRLF, and the
+// encoding, not the checkout, is what is under test.
+func matchesGolden(got []byte, path string) (bool, []byte, error) {
+	want, err := os.ReadFile(path)
+	if err != nil {
+		return false, nil, err
+	}
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
+	return bytes.Equal(got, want), want, nil
+}
+
+func TestGoldenIgnoresLineEndings(t *testing.T) {
+	t.Parallel()
+
+	// A Windows checkout with core.autocrlf rewrites the golden file's LF to
+	// CRLF. What is under test is the encoding, not the file's line endings.
+	encoded := []byte("{\n  \"state\": \"hi\"\n}\n")
+	path := filepath.Join(t.TempDir(), "golden.json")
+	if err := os.WriteFile(path, bytes.ReplaceAll(encoded, []byte("\n"), []byte("\r\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	matches, _, err := matchesGolden(encoded, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matches {
+		t.Error("matchesGolden() rejected an identical encoding checked out with CRLF line endings")
 	}
 }

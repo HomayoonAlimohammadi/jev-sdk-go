@@ -172,15 +172,31 @@ func TestInvalidOptions(t *testing.T) {
 	}
 }
 
-func TestNilOptionArguments(t *testing.T) {
-	clearEnv(t)
-	t.Setenv(APIKeyEnv, "env-key")
-
-	if _, err := New(WithHTTPClient(nil)); err == nil {
-		t.Error("New(WithHTTPClient(nil)) error = nil, want an error")
+func TestInvalidOptionArguments(t *testing.T) {
+	// A value an option cannot use is a configuration error, reported as
+	// ErrInvalidOption and never as a sentinel that describes something else.
+	tests := []struct {
+		name   string
+		option ClientOption
+	}{
+		{"nil http client", WithHTTPClient(nil)},
+		{"nil logger", WithLogger(nil)},
+		{"negative response cap", WithMaxResponseBytes(-1)},
 	}
-	if _, err := New(WithLogger(nil)); err == nil {
-		t.Error("New(WithLogger(nil)) error = nil, want an error")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv(APIKeyEnv, "env-key")
+
+			_, err := New(tt.option)
+			if !errors.Is(err, ErrInvalidOption) {
+				t.Errorf("New() error = %v, want ErrInvalidOption", err)
+			}
+			if errors.Is(err, ErrResponseTooLarge) {
+				t.Errorf("New() error = %v matches ErrResponseTooLarge, which reports a response, not an option", err)
+			}
+		})
 	}
 }
 

@@ -1,3 +1,3 @@
 module github.com/HomayoonAlimohammadi/jev-sdk-go
 
-go 1.27
+go 1.24

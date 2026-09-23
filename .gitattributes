@@ -1,0 +1,3 @@
+# Check out every text file with LF endings on every platform. Golden files
+# are compared byte for byte, and gofmt writes LF.
+* text=auto eol=lf

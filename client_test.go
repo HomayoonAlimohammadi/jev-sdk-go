@@ -531,7 +531,7 @@ func TestSystemOneAs(t *testing.T) {
 
 	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody, requestIDHeader, "req-typed"))
 
-	got, err := client.SystemOneAs[answers](t.Context(), noulRequest())
+	got, err := SystemOneAs[answers](t.Context(), client, noulRequest())
 	if err != nil {
 		t.Fatalf("SystemOneAs() error = %v", err)
 	}
@@ -554,7 +554,7 @@ func TestSystemOneAsWithoutMeta(t *testing.T) {
 
 	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
 
-	got, err := client.SystemOneAs[answers](t.Context(), noulRequest())
+	got, err := SystemOneAs[answers](t.Context(), client, noulRequest())
 	if err != nil {
 		t.Fatalf("SystemOneAs() error = %v", err)
 	}
@@ -572,7 +572,7 @@ func TestSystemOneAsPreservesAPIErrors(t *testing.T) {
 
 	client, _ := newTestClient(t, respondJSON(http.StatusBadRequest, `{"detail":"Invalid request"}`, requestIDHeader, "req-error"))
 
-	_, err := client.SystemOneAs[answers](t.Context(), noulRequest())
+	_, err := SystemOneAs[answers](t.Context(), client, noulRequest())
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -592,7 +592,7 @@ func TestSystemOneAsReportsDecodeFailure(t *testing.T) {
 
 	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
 
-	_, err := client.SystemOneAs[answers](t.Context(), noulRequest())
+	_, err := SystemOneAs[answers](t.Context(), client, noulRequest())
 
 	var responseErr *ResponseError
 	if !errors.As(err, &responseErr) {
@@ -828,14 +828,6 @@ func TestOversizedErrorResponseStaysAnAPIError(t *testing.T) {
 	}
 }
 
-func TestNegativeMaxResponseBytesRejected(t *testing.T) {
-	t.Parallel()
-
-	if _, err := New(WithAPIKey("k"), WithMaxResponseBytes(-1)); !errors.Is(err, ErrResponseTooLarge) {
-		t.Errorf("New() error = %v, want it to reject a negative cap", err)
-	}
-}
-
 func TestStateValidation(t *testing.T) {
 	t.Parallel()
 
@@ -967,7 +959,7 @@ func TestSystemOneAsToleratesPartialAnswers(t *testing.T) {
 
 	client, _ := newTestClient(t, respondJSON(http.StatusOK, systemOneBody))
 
-	got, err := client.SystemOneAs[answers](t.Context(), SystemOneRequest{
+	got, err := SystemOneAs[answers](t.Context(), client, SystemOneRequest{
 		State:     "hello",
 		Questions: map[string]Question{"missing": Noul{Instructions: "never answered"}},
 	})

@@ -12,7 +12,7 @@ releases. Nothing under `internal/` carries a compatibility promise.
 ### Added
 
 - Initial Go client for the TypeSafe AI API, ported from the Python SDK.
-- `Client.SystemOne`, `Client.SystemOneAs[T]` and `Client.ListModels`, all
+- `Client.SystemOne`, `SystemOneAs[T]` and `Client.ListModels`, all
   context-aware and safe for concurrent use.
 - `Noul`, `Choice`, `Score` and `RawQuestion` question types, with client-side
   validation before a request is sent.
@@ -50,10 +50,27 @@ releases. Nothing under `internal/` carries a compatibility promise.
 
 ### Changed
 
+- The minimum Go version is 1.24, down from 1.27. `SystemOneAs` is now a
+  package-level generic function, `jev.SystemOneAs[T](ctx, client, req)`,
+  rather than a method: a generic method was the only thing requiring 1.27.
+  CI tests the floor alongside the latest release.
+
+- A configuration value an option cannot use is reported as the new
+  `ErrInvalidOption`: `WithHTTPClient(nil)` and `WithLogger(nil)` previously
+  returned errors no sentinel matched, and a negative `WithMaxResponseBytes`
+  was misreported as `ErrResponseTooLarge`, which now only ever describes a
+  response.
+
 - Each answer is decoded once rather than twice, validation no longer sorts
   or allocates, disabled logging no longer builds log records, and the base
   URL and protected headers are prepared once per client rather than per call:
   about 22% fewer allocations and 9% less time per call.
+
+### Fixed
+
+- The golden request test compared line endings as well as the encoding, so it
+  failed on Windows, where the checkout turns LF into CRLF. It now normalizes
+  them, and `.gitattributes` checks out LF on every platform.
 
 ### Security
 
